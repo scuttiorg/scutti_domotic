@@ -7,20 +7,28 @@
  * l'une change, l'autre doit changer.
  */
 
+/** Le fuseau dans lequel les règles s'écrivent : celui du bâtiment, quel que soit celui du système. */
+export const FUSEAU = process.env.FUSEAU || 'Europe/Paris';
+
 const enMinutes = (hhmm) => {
   const [h = 0, m = 0] = hhmm.split(':').map(Number);
   return h * 60 + m;
 };
 
-/** Jour ISO : lundi 1, dimanche 7. */
-const jourIso = (date) => (date.getDay() === 0 ? 7 : date.getDay());
+const JOUR_ISO = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+const LECTEUR = new Intl.DateTimeFormat('en-US', { timeZone: FUSEAU, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+/** L'instant en heure murale : jour ISO (lundi 1, dimanche 7) et minutes depuis minuit. */
+export function heureMurale(date) {
+  const parts = Object.fromEntries(LECTEUR.formatToParts(date).map((p) => [p.type, p.value]));
+  return { jour: JOUR_ISO[parts.weekday] ?? 1, minutes: Number(parts.hour) * 60 + Number(parts.minute) };
+}
 
 export function regleCouvre(regle, date) {
   if (!regle.actif) return false;
-  const maintenant = date.getHours() * 60 + date.getMinutes();
+  const { jour, minutes: maintenant } = heureMurale(date);
   const debut = enMinutes(regle.heure_debut);
   const fin = enMinutes(regle.heure_fin);
-  const jour = jourIso(date);
   if (debut <= fin) return regle.jours.includes(jour) && maintenant >= debut && maintenant < fin;
   // La plage passe minuit : ce soir pour le jour de la règle, ce matin pour le lendemain.
   const veille = jour === 1 ? 7 : jour - 1;
