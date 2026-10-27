@@ -1,0 +1,25 @@
+homeassistant: false
+permit_join: false            # à passer à true depuis l'interface le temps d'appairer, puis remettre à false
+
+frontend:
+  port: 8080
+  host: 0.0.0.0               # le conteneur n'est publié que sur 127.0.0.1 (voir docker-compose)
+  # auth_token : fourni par Z2M_AUTH_TOKEN dans .env
+
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://mosquitto:1883
+  # user / password : fournis par MQTT_USER / MQTT_PASSWORD dans .env
+
+serial:
+  port: /dev/ttyUSB0
+  # adapter: ember            # décommenter pour un Sonoff ZBDongle-E
+
+advanced:
+  network_key: GENERATE
+  pan_id: GENERATE
+  ext_pan_id: GENERATE
+  last_seen: ISO_8601
+  log_level: warning
+
+devices: {}

@@ -1,0 +1,29 @@
+[Unit]
+Description=Passerelle chauffage (Zigbee2MQTT -> scuti)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=chauffage
+Group=chauffage
+WorkingDirectory=/opt/chauffage/gateway
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=5
+
+# Durcissement
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/opt/chauffage/gateway/config.cache.json
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+[Install]
+WantedBy=multi-user.target

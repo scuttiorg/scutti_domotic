@@ -1,0 +1,10 @@
+node_modules/
+.env
+config.cache.json
+
+# Zigbee2MQTT : état réseau, clés, base d'appareils
+raspberry/zigbee2mqtt/*
+!raspberry/zigbee2mqtt/configuration.yaml
+
+# Mosquitto : fichier de mots de passe
+raspberry/mosquitto/passwd
