@@ -7,7 +7,19 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 
 echo "→ Paquets"
 apt-get update -q
-apt-get install -y -q docker.io docker-compose-plugin nodejs npm ufw unattended-upgrades mosquitto-clients
+apt-get install -y -q curl ufw unattended-upgrades mosquitto-clients
+
+echo "→ Docker (dépôt officiel : le paquet compose n'est pas dans Raspberry Pi OS)"
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+fi
+docker compose version >/dev/null 2>&1 || apt-get install -y -q docker-compose-plugin
+
+echo "→ Node 22 (dépôt NodeSource : celui de Raspberry Pi OS est trop ancien)"
+if ! command -v node >/dev/null 2>&1 || [ "$(node -e 'console.log(process.versions.node.split(".")[0])')" -lt 20 ]; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  apt-get install -y -q nodejs
+fi
 
 echo "→ Mises à jour automatiques"
 dpkg-reconfigure -f noninteractive unattended-upgrades
