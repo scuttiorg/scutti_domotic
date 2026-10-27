@@ -1,0 +1,44 @@
+/* Structure uniquement. Couleurs/typo : à aligner sur la charte scuti. */
+
+.heating { max-width: 60rem; margin: 0 auto; padding: 1.5rem; }
+.heating__header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+
+.rooms { display: grid; gap: 1.5rem; }
+
+.room { border: 1px solid currentColor; border-radius: .5rem; padding: 1rem; }
+.room__header { display: flex; align-items: baseline; gap: .75rem; }
+.room__name { margin: 0; flex: 1; }
+.room__site { opacity: .6; font-size: .85em; }
+.room__state { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1rem 0; }
+.room__mode { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+.room__footer { display: flex; gap: .5rem; margin-top: 1rem; }
+.room--off { opacity: .55; }
+
+.metric strong { font-size: 1.4em; }
+.muted { opacity: .6; font-size: .85em; }
+
+.badge { font-size: .8em; padding: .15em .6em; border-radius: 1em; border: 1px solid currentColor; }
+.badge--on { font-weight: bold; }
+
+.rules { width: 100%; border-collapse: collapse; font-size: .9em; }
+.rules th, .rules td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid rgba(0,0,0,.1); }
+.rules__actions { white-space: nowrap; text-align: right; }
+.rule--disabled td { opacity: .5; }
+
+.btn { cursor: pointer; }
+.btn--small { font-size: .85em; }
+.btn[aria-pressed="true"] { font-weight: bold; }
+.link { background: none; border: 0; padding: 0 .3rem; cursor: pointer; text-decoration: underline; }
+
+.inline { display: inline-flex; gap: .4rem; align-items: center; }
+
+dialog { border: 1px solid currentColor; border-radius: .5rem; padding: 1.5rem; max-width: 24rem; }
+.form { display: grid; gap: .75rem; }
+.form label { display: grid; gap: .25rem; }
+.form .check, .days label { display: inline-flex; gap: .4rem; align-items: center; }
+.days { display: flex; gap: .75rem; flex-wrap: wrap; }
+.form menu { display: flex; justify-content: flex-end; gap: .5rem; margin: .5rem 0 0; padding: 0; }
+
+.sites { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1.5rem; font-size: .9em; }
+.site { display: inline-flex; gap: .5rem; align-items: baseline; }
+#dlg-token output code { display: block; padding: .5rem; word-break: break-all; user-select: all; }
