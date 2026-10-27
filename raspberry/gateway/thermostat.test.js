@@ -1,33 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { currentSetpoint, shouldHeat } from './thermostat.js';
+import { consigneEnVigueur, doitChauffer } from './thermostat.js';
 
-const room = {
-  enabled: true, mode: 'auto', default_setpoint: 16, hysteresis: 0.5,
-  rules: [
-    { enabled: true, priority: 10, days: [1, 2, 3, 4, 5], time_from: '07:00', time_to: '22:00', setpoint: 19 },
-    { enabled: true, priority: 5, days: [6, 7], time_from: '22:00', time_to: '06:00', setpoint: 14 },
+const piece = {
+  mode: 'auto', consigne_defaut: 16, consigne_manuelle: null, manuel_jusqua: null,
+  regles: [
+    { actif: true, priorite: 10, jours: [1, 2, 3, 4, 5], heure_debut: '07:00', heure_fin: '22:00', consigne: 19 },
+    { actif: true, priorite: 5, jours: [6, 7], heure_debut: '22:00', heure_fin: '06:00', consigne: 14 },
   ],
 };
 const mardi10h = new Date('2026-10-27T10:00:00');
 const mardi23h = new Date('2026-10-27T23:00:00');
 const dimanche2h = new Date('2026-11-01T02:00:00');
+const lundi2h = new Date('2026-11-02T02:00:00');
 
-test('règle de jour en semaine', () => assert.equal(currentSetpoint(room, mardi10h), 19));
-test('hors règle → consigne par défaut', () => assert.equal(currentSetpoint(room, mardi23h), 16));
-test('plage traversant minuit', () => assert.equal(currentSetpoint(room, dimanche2h), 14));
-test('mode off', () => assert.equal(currentSetpoint({ ...room, mode: 'off' }, mardi10h), null));
-test('pièce désactivée', () => assert.equal(currentSetpoint({ ...room, enabled: false }, mardi10h), null));
-
-test('manuel prime sur les règles', () =>
-  assert.equal(currentSetpoint({ ...room, mode: 'manual', manual_setpoint: 21, manual_until: null }, mardi10h), 21));
-test('manuel expiré → retour aux règles', () =>
-  assert.equal(currentSetpoint({ ...room, mode: 'manual', manual_setpoint: 21, manual_until: '2026-10-27T09:00:00' }, mardi10h), 19));
-
-test('hystérésis : allume sous consigne − h/2', () => assert.equal(shouldHeat(room, 18.5, false, mardi10h), true));
-test('hystérésis : conserve l’état dans la bande', () => {
-  assert.equal(shouldHeat(room, 19, false, mardi10h), false);
-  assert.equal(shouldHeat(room, 19, true, mardi10h), true);
+test('règle de jour en semaine', () => assert.equal(consigneEnVigueur(piece, mardi10h), 19));
+test('hors règle → consigne par défaut', () => assert.equal(consigneEnVigueur(piece, mardi23h), 16));
+test('plage traversant minuit, le matin suivant aussi', () => {
+  assert.equal(consigneEnVigueur(piece, dimanche2h), 14);
+  assert.equal(consigneEnVigueur(piece, lundi2h), 14);
 });
-test('hystérésis : éteint au-dessus de consigne + h/2', () => assert.equal(shouldHeat(room, 19.4, true, mardi10h), false));
-test('sans température → jamais chauffer', () => assert.equal(shouldHeat(room, null, true, mardi10h), false));
+test('mode off', () => assert.equal(consigneEnVigueur({ ...piece, mode: 'off' }, mardi10h), null));
+test('manuel prime sur les règles', () =>
+  assert.equal(consigneEnVigueur({ ...piece, mode: 'manuel', consigne_manuelle: 21 }, mardi10h), 21));
+test('manuel expiré → retour aux règles', () =>
+  assert.equal(consigneEnVigueur({ ...piece, mode: 'manuel', consigne_manuelle: 21, manuel_jusqua: '2026-10-27T09:00:00' }, mardi10h), 19));
+
+test('hystérésis : allume sous consigne − h/2', () => assert.equal(doitChauffer(19, 18.5, false, 0.5), true));
+test('hystérésis : conserve l’état dans la bande', () => {
+  assert.equal(doitChauffer(19, 19, false, 0.5), false);
+  assert.equal(doitChauffer(19, 19, true, 0.5), true);
+});
+test('hystérésis : éteint au-dessus de consigne + h/2', () => assert.equal(doitChauffer(19, 19.4, true, 0.5), false));
+test('sans température → jamais chauffer', () => assert.equal(doitChauffer(19, null, true, 0.5), false));

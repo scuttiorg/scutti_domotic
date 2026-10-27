@@ -1,70 +1,46 @@
-# Chauffage
+# scutti_domotic
 
-Pilotage de radiateurs à distance : capteurs et prises Zigbee sur un Raspberry Pi, pièces et règles gérées dans scuti.
+La passerelle Raspberry du module Domotique de scutti : capteurs et prises
+Zigbee lus et commandés sur place, pièces, règles et modes réglés dans
+scutti.
 
 ```
-capteur Zigbee ──┐                                   ┌── interface scuti (pièces, règles, modes)
+capteur Zigbee ──┐                                   ┌── scutti : pièces, règles, modes
                  ├─ dongle → Zigbee2MQTT → Mosquitto ─┤
-prise Zigbee  ───┘            (Docker)                └── gateway (Node) ⇄ HTTPS ⇄ API scuti
+prise Zigbee  ───┘            (Docker)                └── gateway (Node) ⇄ HTTPS ⇄ /api/public/domotique/passerelle
 ```
 
-- **Un Raspberry par site**, identifié par un token.
-- La **passerelle décide localement** (consigne ± hystérésis) et continue sur la dernière config connue si scuti est injoignable.
+- **Un Raspberry par passerelle**, identifié par le jeton que scutti affiche à sa déclaration.
+- La **passerelle décide localement** (consigne ± hystérésis, même règle que scutti) et continue sur la dernière configuration connue si scutti est injoignable.
 - **Sécurité physique** : sans relevé capteur depuis `SENSOR_TIMEOUT`, le radiateur est coupé.
+- Une passerelle sert **plusieurs espaces** scutti : chacun crée ses pièces, le Raspberry les chauffe toutes.
 
-## Modèle
-
-| Objet  | Rôle |
-|--------|------|
-| Site   | un Raspberry ; token de passerelle (haché en base, affiché une seule fois) |
-| Pièce  | capteur + prise Zigbee2MQTT, consigne par défaut, hystérésis, mode `off / auto / manual` |
-| Règle  | par pièce : jours, plage horaire (peut traverser minuit), consigne, priorité |
-
-Consigne en vigueur : mode `off` → rien ; mode `manual` (non expiré) → consigne manuelle ; sinon première règle active qui matche par priorité croissante ; sinon consigne par défaut.
-
-## Raspberry (`raspberry/`)
+## Installation
 
 ```sh
-sudo ./install.sh          # Docker, ufw (SSH only), unattended-upgrades, utilisateur de service, systemd durci
+sudo ./raspberry/install.sh   # Docker, ufw (SSH only), unattended-upgrades, utilisateur de service, systemd durci
 ```
-Puis suivre les instructions affichées : `.env` (MQTT, token Zigbee2MQTT), `gateway/.env` (token scuti), `docker compose up -d`, appairage via tunnel SSH, démarrage du service.
+Puis suivre les instructions affichées : `.env` (MQTT, jeton Zigbee2MQTT), `gateway/.env` (`SCUTTI_URL`, `SCUTTI_TOKEN`), `docker compose up -d`, appairage via tunnel SSH, démarrage du service.
 
 Mosquitto et l'interface Zigbee2MQTT n'écoutent que sur `127.0.0.1`. Accès à l'interface : `ssh -L 8080:127.0.0.1:8080 pi@<ip>`.
 
-Tests de la logique : `cd gateway && npm test`.
+Dans Zigbee2MQTT, nommer chaque capteur et chaque prise comme dans la pièce correspondante de scutti (`atelier/thermo`, `atelier/radiateur`).
 
-## scuti (`scuti/`)
+Tests de la logique : `cd raspberry/gateway && npm test`.
 
-1. Appliquer `modules/heating/migration.sql`.
-2. `npm i @fastify/rate-limit` et enregistrer le module :
-   ```js
-   app.register(heatingRoutes, {
-     prefix: '/api/heating',
-     db,                                   // better-sqlite3 (prepare/get/all/run/transaction)
-     requireUser: scutiAuthHook,           // refuse les non-connectés
-     isAdmin: (req) => req.user.role === 'admin',
-   });
-   ```
-3. Servir `public/heating/` ; aligner `heating.css` sur la charte.
+## Ce que la passerelle fait
 
-### API
+| Quand | Quoi |
+|---|---|
+| toutes les `PULL_INTERVAL` s | `GET /configuration` : les pièces de tous les espaces admis, leurs règles, leur mode ; mis en cache |
+| à chaque relevé MQTT | calcule la consigne en vigueur et pilote la prise (hystérésis) |
+| toutes les minutes | réévalue les règles horaires, coupe un capteur muet |
+| toutes les `PUSH_INTERVAL` s | `POST /releves` : température, humidité, état du radiateur, consigne appliquée |
+| à l'arrêt | coupe toutes les prises |
 
-| Méthode | Route | Accès |
-|---|---|---|
-| GET | `/sites` | utilisateur |
-| POST | `/sites` · `/sites/:id/rotate-token` | admin — renvoie le token une seule fois |
-| DELETE | `/sites/:id` | admin |
-| GET | `/rooms` · `/rooms/:id` · `/rooms/:id/history?hours=` | utilisateur |
-| POST/PUT/DELETE | `/rooms` · `/rooms/:id` | admin |
-| PUT | `/rooms/:id/mode` | utilisateur |
-| POST/PUT/DELETE | `/rules` · `/rules/:id` | utilisateur |
-| GET | `/gateway/config` | passerelle (Bearer token de site) |
-| POST | `/gateway/readings` | passerelle, 60 req/min, body ≤ 64 Ko |
+## Sécurité
 
-## Sécurité — récapitulatif
-
-- Token de site 256 bits, stocké en SHA‑256, rotation possible, jamais réaffiché.
-- Passerelle : HTTPS imposé, TLS vérifié (CA interne possible), pas de redirection suivie, relevés MQTT filtrés (plages de valeurs).
-- scuti : Zod strict partout, horodatages bornés, rate‑limit et limite de taille sur les routes passerelle, erreurs sans stack, cloisonnement par site.
-- Raspberry : aucun port exposé hors SSH, MQTT authentifié, service systemd sans privilèges (`ProtectSystem=strict`, `NoNewPrivileges`…), mises à jour automatiques, SSH par clé.
+- Jeton 256 bits, stocké haché côté scutti, jamais réaffiché ; `https://` imposé, TLS vérifié (CA interne possible), pas de redirection suivie.
+- Relevés MQTT filtrés (plages de valeurs) ; horodatages bornés côté scutti.
+- Raspberry : aucun port exposé hors SSH, MQTT authentifié, service systemd sans privilèges, mises à jour automatiques, SSH par clé.
 - Fail-safe : coupure si capteur muet, coupure à l'arrêt du service.

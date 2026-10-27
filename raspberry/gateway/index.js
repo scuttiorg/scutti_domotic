@@ -1,87 +1,91 @@
 import config from './config.js';
 import { subscribe, unsubscribe, setPlug } from './mqtt.js';
-import { shouldHeat, currentSetpoint } from './thermostat.js';
-import { fetchRooms, pushReadings } from './scuti.js';
+import { consigneEnVigueur, doitChauffer } from './thermostat.js';
+import { fetchConfiguration, pushReleves } from './scutti.js';
 
-/** roomId -> { room, temperature, humidity, heating, updatedAt } */
+/** pieceUuid -> { piece, temperature, humidite, chauffe, releveLe } */
 const state = new Map();
 
-function onReading(roomId, payload) {
-  const s = state.get(roomId);
+/** Sans relevé récent, on ne pilote pas à l'aveugle : radiateur coupé. */
+const capteurVivant = (s) => s.releveLe && Date.now() - Date.parse(s.releveLe) < config.sensorTimeout;
+
+function onReleve(uuid, releve) {
+  const s = state.get(uuid);
   if (!s) return;
-  if (payload.temperature !== undefined) s.temperature = payload.temperature;
-  if (payload.humidity !== undefined) s.humidity = payload.humidity;
-  s.updatedAt = new Date().toISOString();
-  regulate(s);
+  if (releve.temperature !== undefined) s.temperature = releve.temperature;
+  if (releve.humidite !== undefined) s.humidite = releve.humidite;
+  s.releveLe = new Date().toISOString();
+  reguler(s);
 }
 
-/** Sans relevé récent, on ne pilote pas à l'aveugle : radiateur coupé. */
-const sensorAlive = (s) => s.updatedAt && Date.now() - Date.parse(s.updatedAt) < config.sensorTimeout;
-
-function regulate(s) {
-  const heat = sensorAlive(s) && shouldHeat(s.room, s.temperature, s.heating);
-  if (!sensorAlive(s) && s.heating) console.warn(`[${s.room.name}] capteur muet → coupure de sécurité`);
-  if (heat !== s.heating) {
-    s.heating = heat;
-    setPlug(s.room.plug_name, heat);
-    console.log(`[${s.room.name}] ${s.temperature}°C → radiateur ${heat ? 'ON' : 'OFF'}`);
+function reguler(s) {
+  const consigne = capteurVivant(s) ? consigneEnVigueur(s.piece) : null;
+  const chauffer = doitChauffer(consigne, s.temperature, s.chauffe, s.piece.hysteresis);
+  if (!capteurVivant(s) && s.chauffe) console.warn(`[${s.piece.nom}] capteur muet → coupure de sécurité`);
+  if (chauffer !== s.chauffe) {
+    s.chauffe = chauffer;
+    setPlug(s.piece.prise, chauffer);
+    console.log(`[${s.piece.nom}] ${s.temperature} °C, consigne ${consigne ?? 'aucune'} → radiateur ${chauffer ? 'ON' : 'OFF'}`);
   }
 }
 
-function applyRooms(rooms) {
-  const seen = new Set();
-  for (const room of rooms) {
-    seen.add(room.id);
-    const existing = state.get(room.id);
-    if (existing) {
-      if (existing.room.sensor_name !== room.sensor_name) {
-        unsubscribe(existing.room.sensor_name);
-        subscribe(room.sensor_name, (p) => onReading(room.id, p));
+function appliquer(pieces) {
+  const vues = new Set();
+  for (const piece of pieces) {
+    vues.add(piece.uuid);
+    const existant = state.get(piece.uuid);
+    if (existant) {
+      if (existant.piece.capteur !== piece.capteur) {
+        unsubscribe(existant.piece.capteur);
+        subscribe(piece.capteur, (r) => onReleve(piece.uuid, r));
       }
-      existing.room = room;
-      regulate(existing);
+      if (existant.piece.prise !== piece.prise) setPlug(existant.piece.prise, false);
+      existant.piece = piece;
+      reguler(existant);
     } else {
-      state.set(room.id, { room, temperature: null, humidity: null, heating: false, updatedAt: null });
-      subscribe(room.sensor_name, (p) => onReading(room.id, p));
-      setPlug(room.plug_name, false);
+      state.set(piece.uuid, { piece, temperature: null, humidite: null, chauffe: false, releveLe: null });
+      subscribe(piece.capteur, (r) => onReleve(piece.uuid, r));
+      setPlug(piece.prise, false);
     }
   }
-  for (const [id, s] of state) {
-    if (seen.has(id)) continue;
-    unsubscribe(s.room.sensor_name);
-    setPlug(s.room.plug_name, false);
-    state.delete(id);
+  // Une pièce qui n'est plus dans la configuration (supprimée, désactivée,
+  // espace retiré) : on la coupe et on l'oublie.
+  for (const [uuid, s] of state) {
+    if (vues.has(uuid)) continue;
+    unsubscribe(s.piece.capteur);
+    setPlug(s.piece.prise, false);
+    state.delete(uuid);
   }
 }
 
 async function pull() {
-  const rooms = await fetchRooms();
-  if (rooms) applyRooms(rooms);
+  const configuration = await fetchConfiguration();
+  if (configuration) appliquer(configuration.pieces);
 }
 
 function push() {
-  const readings = [...state.values()]
-    .filter((s) => s.updatedAt)
+  const releves = [...state.values()]
+    .filter((s) => s.releveLe)
     .map((s) => ({
-      room_id: s.room.id,
+      piece_uuid: s.piece.uuid,
       temperature: s.temperature,
-      humidity: s.humidity,
-      heating: s.heating,
-      setpoint: currentSetpoint(s.room),
-      measured_at: s.updatedAt,
+      humidite: s.humidite,
+      chauffe: s.chauffe,
+      consigne: capteurVivant(s) ? consigneEnVigueur(s.piece) : null,
+      mesure_le: s.releveLe,
     }));
-  if (readings.length) pushReadings(readings);
+  if (releves.length) pushReleves(releves);
 }
 
 // Réévaluation périodique : les règles horaires changent sans nouveau relevé.
-setInterval(() => state.forEach(regulate), 60_000);
+setInterval(() => state.forEach(reguler), 60_000);
 setInterval(pull, config.pullInterval);
 setInterval(push, config.pushInterval);
 
 // Arrêt propre : tout couper avant de quitter.
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
-    state.forEach((s) => setPlug(s.room.plug_name, false));
+    state.forEach((s) => setPlug(s.piece.prise, false));
     setTimeout(() => process.exit(0), 500);
   });
 }
