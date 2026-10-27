@@ -1,5 +1,5 @@
 [Unit]
-Description=Passerelle chauffage (Zigbee2MQTT -> scuti)
+Description=Passerelle chauffage (Zigbee2MQTT -> scutti)
 After=network-online.target docker.service
 Wants=network-online.target
 

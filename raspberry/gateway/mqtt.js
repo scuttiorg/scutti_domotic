@@ -14,9 +14,9 @@ function sanitize(payload) {
   const inRange = (v, min, max) => (typeof v === 'number' && v >= min && v <= max ? v : undefined);
   const reading = {
     temperature: inRange(payload.temperature, -30, 60),
-    humidity: inRange(payload.humidity, 0, 100),
+    humidite: inRange(payload.humidity, 0, 100),
   };
-  return reading.temperature === undefined && reading.humidity === undefined ? null : reading;
+  return reading.temperature === undefined && reading.humidite === undefined ? null : reading;
 }
 
 client.on('message', (topic, buffer) => {

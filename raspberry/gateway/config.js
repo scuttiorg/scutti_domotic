@@ -13,8 +13,8 @@ const required = (key) => {
 };
 const seconds = (key, def) => Number(process.env[key] ?? def) * 1000;
 
-const scutiUrl = required('SCUTI_URL').replace(/\/$/, '');
-if (!scutiUrl.startsWith('https://')) throw new Error('SCUTI_URL doit être en https://');
+const scuttiUrl = required('SCUTTI_URL').replace(/\/$/, '');
+if (!scuttiUrl.startsWith('https://')) throw new Error('SCUTTI_URL doit être en https://');
 
 export default {
   mqtt: {
@@ -23,10 +23,10 @@ export default {
     password: required('MQTT_PASSWORD'),
     baseTopic: process.env.MQTT_BASE_TOPIC ?? 'zigbee2mqtt',
   },
-  scuti: {
-    url: scutiUrl,
-    token: required('SCUTI_TOKEN'),
-    ca: process.env.SCUTI_CA ? readFileSync(process.env.SCUTI_CA) : undefined,
+  scutti: {
+    url: scuttiUrl,
+    token: required('SCUTTI_TOKEN'),
+    ca: process.env.SCUTTI_CA ? readFileSync(process.env.SCUTTI_CA) : undefined,
   },
   pushInterval: seconds('PUSH_INTERVAL', 300),
   pullInterval: seconds('PULL_INTERVAL', 60),

@@ -60,9 +60,9 @@ systemctl enable chauffage-gateway
 cat <<EOF
 
 Terminé. Reste à faire :
-  1. Éditer $DEST/.env et $DEST/gateway/.env (mots de passe, token scuti).
+  1. Éditer $DEST/.env et $DEST/gateway/.env (mots de passe, jeton scutti).
   2. cd $DEST && docker compose up -d
   3. Appairer les appareils via un tunnel : ssh -L 8080:127.0.0.1:8080 pi@<ip>  puis http://localhost:8080
-     (nommer capteur et prise comme dans scuti, puis remettre permit_join à false)
+     (nommer capteur et prise comme dans scutti, puis remettre permit_join à false)
   4. systemctl start chauffage-gateway && journalctl -fu chauffage-gateway
 EOF

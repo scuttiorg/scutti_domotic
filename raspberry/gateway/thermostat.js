@@ -1,45 +1,53 @@
 /**
- * Logique pure, sans I/O : à partir d'une pièce (config + règles + mode),
- * d'une température et de l'état actuel du radiateur, décide on/off.
+ * Logique pure, sans I/O : à partir d'une pièce (mode, consigne manuelle,
+ * règles) et d'une température, décide ce que vise le radiateur et s'il
+ * doit chauffer.
+ *
+ * Même règle que scutti (src/modules/domotique/services/consigne.ts) : si
+ * l'une change, l'autre doit changer.
  */
 
-const toMinutes = (hhmm) => {
-  const [h, m] = hhmm.split(':').map(Number);
+const enMinutes = (hhmm) => {
+  const [h = 0, m = 0] = hhmm.split(':').map(Number);
   return h * 60 + m;
 };
 
-function ruleMatches(rule, date) {
-  if (!rule.enabled) return false;
-  const day = date.getDay() === 0 ? 7 : date.getDay(); // 1=lundi … 7=dimanche
-  if (!rule.days.includes(day)) return false;
-  const now = date.getHours() * 60 + date.getMinutes();
-  const from = toMinutes(rule.time_from);
-  const to = toMinutes(rule.time_to);
-  return from <= to ? now >= from && now < to : now >= from || now < to;
+/** Jour ISO : lundi 1, dimanche 7. */
+const jourIso = (date) => (date.getDay() === 0 ? 7 : date.getDay());
+
+export function regleCouvre(regle, date) {
+  if (!regle.actif) return false;
+  const maintenant = date.getHours() * 60 + date.getMinutes();
+  const debut = enMinutes(regle.heure_debut);
+  const fin = enMinutes(regle.heure_fin);
+  const jour = jourIso(date);
+  if (debut <= fin) return regle.jours.includes(jour) && maintenant >= debut && maintenant < fin;
+  // La plage passe minuit : ce soir pour le jour de la règle, ce matin pour le lendemain.
+  const veille = jour === 1 ? 7 : jour - 1;
+  return (regle.jours.includes(jour) && maintenant >= debut) || (regle.jours.includes(veille) && maintenant < fin);
 }
 
-/** Retourne la consigne en vigueur (null = chauffage coupé). */
-export function currentSetpoint(room, date = new Date()) {
-  if (!room.enabled || room.mode === 'off') return null;
+/** La consigne en vigueur (null = radiateur coupé). */
+export function consigneEnVigueur(piece, date = new Date()) {
+  if (piece.mode === 'off') return null;
 
-  if (room.mode === 'manual') {
-    const expired = room.manual_until && new Date(room.manual_until) < date;
-    if (!expired) return room.manual_setpoint;
+  if (piece.mode === 'manuel' && piece.consigne_manuelle !== null) {
+    const echu = piece.manuel_jusqua !== null && new Date(piece.manuel_jusqua) < date;
+    if (!echu) return piece.consigne_manuelle;
   }
 
-  const rule = [...room.rules]
-    .sort((a, b) => a.priority - b.priority)
-    .find((r) => ruleMatches(r, date));
+  const regle = [...piece.regles]
+    .sort((a, b) => a.priorite - b.priorite)
+    .find((r) => regleCouvre(r, date));
 
-  return rule ? rule.setpoint : room.default_setpoint;
+  return regle ? regle.consigne : piece.consigne_defaut;
 }
 
-/** Hystérésis : n'allume qu'en dessous de consigne−h/2, n'éteint qu'au-dessus de consigne+h/2. */
-export function shouldHeat(room, temperature, heating, date = new Date()) {
-  const setpoint = currentSetpoint(room, date);
-  if (setpoint === null || temperature === null) return false;
-  const half = (room.hysteresis ?? 0.5) / 2;
-  if (temperature < setpoint - half) return true;
-  if (temperature > setpoint + half) return false;
-  return heating;
+/** Hystérésis : n'allume qu'en dessous de consigne − h/2, n'éteint qu'au-dessus de consigne + h/2. */
+export function doitChauffer(consigne, temperature, chauffe, hysteresis = 0.5) {
+  if (consigne === null || temperature === null) return false;
+  const demi = hysteresis / 2;
+  if (temperature < consigne - demi) return true;
+  if (temperature > consigne + demi) return false;
+  return chauffe;
 }
