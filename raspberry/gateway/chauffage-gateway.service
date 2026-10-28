@@ -21,6 +21,10 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6
 ReadWritePaths=/opt/chauffage/gateway/config.cache.json
+# L'état local (ce qui a été réglé sur le boîtier, avec la date de chaque
+# champ) : /var/lib/chauffage, créé par systemd au nom du service. Le dossier
+# du programme reste en lecture seule.
+StateDirectory=chauffage
 CapabilityBoundingSet=
 LockPersonality=true
 MemoryDenyWriteExecute=false

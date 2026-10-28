@@ -1,0 +1,35 @@
+/* Le peu de style propre au boîtier : ce que le kit ne porte pas, parce que
+ * ces pages n'existent pas dans Scutti. Tout le reste vient de kit.css, qui
+ * est une copie engendrée du kit, et ne se modifie pas à la main.
+ */
+
+.boitier-page {
+  padding: var(--spacing-6);
+}
+
+/* Les trois pages empilent des cartes : l'espacement est ici, pas dans le
+ * gabarit. */
+.boitier-page > .k-card,
+.boitier-page > .k-alert {
+  margin-bottom: var(--spacing-4);
+}
+
+/* Ce que le script cache quand il a chargé : le bouton de repli des
+ * formulaires qui se postent tout seuls. Écrite ici, après kit.css, la règle
+ * l'emporte sans `!important`. */
+.boitier-cache {
+  display: none;
+}
+
+/* Une rangée de réglage : la liste, et son bouton de repli à côté. */
+.boitier-rangee {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* Le nom d'un appareil : assez large pour un nom complet, pas la cellule
+ * entière, sinon le bouton part à la ligne. */
+.boitier-nom {
+  flex: 0 1 22rem;
+}
