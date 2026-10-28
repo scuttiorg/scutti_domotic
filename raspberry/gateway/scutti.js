@@ -42,3 +42,34 @@ export async function pushReleves(releves) {
   try { await call('POST', '/releves', { releves }); }
   catch (e) { console.warn('[scutti] envoi des relevés échoué :', e.message); }
 }
+
+/**
+ * Les commandes à exécuter. LES LIRE, C'EST LES PRENDRE : Scutti ne les
+ * rendra pas deux fois, et une fenêtre d'appairage ne se rouvre donc pas
+ * toute seule au passage suivant.
+ */
+export async function fetchCommandes() {
+  try {
+    const data = await call('GET', '/commandes');
+    return data.commandes ?? [];
+  } catch (e) {
+    console.warn('[scutti] commandes injoignables :', e.message);
+    return [];
+  }
+}
+
+/** Ce que le bridge a répondu : rien si tout s'est bien passé. */
+export async function ackCommande(id, erreur = null) {
+  try { await call('POST', `/commandes/${id}/acquitter`, { erreur }); }
+  catch (e) { console.warn('[scutti] acquittement échoué :', e.message); }
+}
+
+/**
+ * La liste des appareils du réseau Zigbee. Elle REMPLACE la précédente :
+ * c'est la passerelle qui sait ce qui est branché, et un appareil retiré
+ * doit disparaître des écrans.
+ */
+export async function putAppareils(appareils) {
+  try { await call('PUT', '/appareils', { appareils }); return true; }
+  catch (e) { console.warn('[scutti] envoi des appareils échoué :', e.message); return false; }
+}

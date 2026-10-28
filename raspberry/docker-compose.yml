@@ -14,8 +14,9 @@ services:
     restart: unless-stopped
     depends_on:
       - mosquitto
-    ports:
-      - "127.0.0.1:8080:8080"          # interface web accessible via tunnel SSH uniquement
+    # Aucun port : l'interface web de Zigbee2MQTT est retirée. L'appairage
+    # et le nommage se font depuis Scutti, et la passerelle ne reçoit rien,
+    # elle tire ses commandes.
     volumes:
       - ./zigbee2mqtt:/app/data
       - /run/udev:/run/udev:ro
@@ -25,7 +26,6 @@ services:
       - TZ=Europe/Paris
       - ZIGBEE2MQTT_CONFIG_MQTT_USER=${MQTT_USER}
       - ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD=${MQTT_PASSWORD}
-      - ZIGBEE2MQTT_CONFIG_FRONTEND_AUTH_TOKEN=${Z2M_AUTH_TOKEN}
 
 volumes:
   mosquitto-data:

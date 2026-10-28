@@ -1,10 +1,10 @@
 homeassistant: false
-permit_join: false            # à passer à true depuis l'interface le temps d'appairer, puis remettre à false
+# L'appairage s'ouvre depuis Scutti, qui envoie `bridge/request/permit_join`
+# pour la durée demandée ; le bridge le referme tout seul à l'échéance.
+permit_join: false
 
-frontend:
-  port: 8080
-  host: 0.0.0.0               # le conteneur n'est publié que sur 127.0.0.1 (voir docker-compose)
-  # auth_token : fourni par Z2M_AUTH_TOKEN dans .env
+# Pas de `frontend` : l'interface web de Zigbee2MQTT est retirée. Tout ce
+# qu'on y faisait (appairer, renommer) se fait dans Scutti.
 
 mqtt:
   base_topic: zigbee2mqtt
