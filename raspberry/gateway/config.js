@@ -30,6 +30,12 @@ export default {
   },
   pushInterval: seconds('PUSH_INTERVAL', 300),
   pullInterval: seconds('PULL_INTERVAL', 60),
+  // Tant qu'une commande attend, on revient vite : ouvrir l'appairage depuis
+  // Scutti ne doit pas demander d'attendre une minute devant l'appareil.
+  pullIntervalRapide: seconds('PULL_INTERVAL_RAPIDE', 10),
+  // Le plancher entre deux envois de la liste des appareils : elle part à
+  // chaque changement du réseau, et au plus une fois par ce délai.
+  appareilsInterval: seconds('APPAREILS_INTERVAL', 300),
   sensorTimeout: seconds('SENSOR_TIMEOUT', 1200),
   cacheFile: 'config.cache.json',
 };
