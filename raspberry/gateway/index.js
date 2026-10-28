@@ -2,7 +2,7 @@ import config from './config.js';
 import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge } from './mqtt.js';
 import { consigneEnVigueur, doitChauffer } from './thermostat.js';
 import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger } from './scutti.js';
-import { construireAppareils } from './devices.js';
+import { construireAppareils, signature } from './devices.js';
 import EtatLocal from './local.js';
 import { valeur } from './fusion.js';
 import { demarrerInterfaceLocale } from './web.js';
@@ -109,25 +109,53 @@ function appliquer(brutes) {
 // ── Les appareils du réseau Zigbee ──────────────────────────────────────────
 //
 // Le bridge publie sa liste à chaque changement (appairage, départ,
-// renommage), et chaque appareil qui parle dit sa batterie et sa date. On
-// remonte à Scutti à chaque changement, et au plus une fois toutes les cinq
-// minutes : sans ce plancher, un réseau bavard enverrait la liste entière à
-// chaque relevé.
+// renommage), et chaque appareil qui parle dit sa batterie et sa date.
+//
+// Un changement du RÉSEAU (un appareil arrive, part, change de nom ou livre
+// son modèle) part tout de suite : c'est ce qu'attend la personne qui vient
+// d'appuyer sur le bouton de l'appareil, les yeux sur Scutti. Le reste, la
+// batterie et la date, part au plus une fois toutes les cinq minutes.
 
 /** nom Zigbee2MQTT -> { batterie, vuLe } */
 const vus = new Map();
 let inventaire = [];
 let envoiAppareils = null;
 let dernierEnvoi = 0;
+/** La signature du réseau que Scutti a reçue, après un envoi RÉUSSI. */
+let reseauEnvoye = null;
+/**
+ * Un envoi en vol, et s'il faut en refaire un derrière lui. Deux PUT de la
+ * liste entière qui se croisent pourraient arriver dans le désordre, et
+ * Scutti garderait la plus ancienne : on les met donc en file.
+ */
+let enVol = false;
+let aRefaire = false;
 
-function envoyerAppareils() {
+async function envoyerAppareils() {
+  clearTimeout(envoiAppareils);
   envoiAppareils = null;
+  if (enVol) { aRefaire = true; return; }
+  enVol = true;
   dernierEnvoi = Date.now();
-  putAppareils(construireAppareils(inventaire, vus));
+  const appareils = construireAppareils(inventaire, vus);
+  const recu = await putAppareils(appareils);
+  if (recu) reseauEnvoye = signature(appareils);
+  enVol = false;
+  if (aRefaire) { aRefaire = false; planifierAppareils(); }
+  // Scutti injoignable : on réessaie à la minute, sans attendre que le
+  // réseau Zigbee change de nouveau.
+  else if (!recu && !envoiAppareils) envoiAppareils = setTimeout(envoyerAppareils, config.pullInterval);
 }
 
-/** Programme l'envoi, en respectant le plancher entre deux. */
+/**
+ * Programme l'envoi : tout de suite si le réseau a changé depuis ce que
+ * Scutti a reçu, au plancher sinon.
+ */
 function planifierAppareils() {
+  if (signature(construireAppareils(inventaire, vus)) !== reseauEnvoye) {
+    envoyerAppareils();
+    return;
+  }
   if (envoiAppareils) return;
   const attente = Math.max(0, config.appareilsInterval - (Date.now() - dernierEnvoi));
   envoiAppareils = setTimeout(envoyerAppareils, attente);

@@ -34,8 +34,9 @@ export default {
   // Tant qu'une commande attend, on revient vite : ouvrir l'appairage depuis
   // Scutti ne doit pas demander d'attendre une minute devant l'appareil.
   pullIntervalRapide: seconds('PULL_INTERVAL_RAPIDE', 10),
-  // Le plancher entre deux envois de la liste des appareils : elle part à
-  // chaque changement du réseau, et au plus une fois par ce délai.
+  // Le plancher entre deux envois de la batterie et de la date de dernière
+  // vue des appareils. Un changement du réseau (arrivée, départ, nom,
+  // modèle) n'attend pas : il part tout de suite.
   appareilsInterval: seconds('APPAREILS_INTERVAL', 300),
   sensorTimeout: seconds('SENSOR_TIMEOUT', 1200),
   cacheFile: 'config.cache.json',
