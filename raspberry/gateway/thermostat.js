@@ -35,7 +35,31 @@ export function regleCouvre(regle, date) {
   return (regle.jours.includes(jour) && maintenant >= debut) || (regle.jours.includes(veille) && maintenant < fin);
 }
 
-/** La consigne en vigueur (null = radiateur coupé). */
+/** Au-dessus, dehors, une pièce qui a la coupure ne chauffe pas. */
+export const SEUIL_DOUX = 17;
+/** L'avance la plus longue, par grand froid. */
+export const AVANCE_MAX = 45;
+/** Une température extérieure plus vieille ne compte plus (Scutti injoignable). */
+const EXTERIEUR_VALIDE_MS = 3 * 3_600_000;
+
+/** Les minutes d'avance : aucune à 15 °C dehors et au-dessus, 3 par degré en dessous. */
+export function avance(exterieur) {
+  return Math.min(AVANCE_MAX, Math.max(0, Math.round((15 - exterieur) * 3)));
+}
+
+function exterieurDe(exterieur, date) {
+  if (!exterieur) return null;
+  return date - Date.parse(exterieur.le) < EXTERIEUR_VALIDE_MS ? exterieur.temperature : null;
+}
+
+const regleA = (piece, date) => [...piece.regles]
+  .sort((a, b) => a.priorite - b.priorite)
+  .find((r) => regleCouvre(r, date));
+
+/**
+ * La consigne en vigueur (null = radiateur coupé). La température
+ * extérieure vient de Scutti, avec la configuration de la pièce.
+ */
 export function consigneEnVigueur(piece, date = new Date()) {
   if (piece.mode === 'off') return null;
 
@@ -44,11 +68,17 @@ export function consigneEnVigueur(piece, date = new Date()) {
     if (!echu) return piece.consigne_manuelle;
   }
 
-  const regle = [...piece.regles]
-    .sort((a, b) => a.priorite - b.priorite)
-    .find((r) => regleCouvre(r, date));
+  const exterieur = exterieurDe(piece.exterieur, date);
+  if (piece.coupure_exterieur && exterieur !== null && exterieur > SEUIL_DOUX) return null;
 
-  return regle ? regle.consigne : piece.consigne_defaut;
+  const regle = regleA(piece, date);
+  const ici = regle ? regle.consigne : piece.consigne_defaut;
+  // Par temps froid, une plage plus chaude qui commence bientôt démarre maintenant.
+  if (piece.anticipation && exterieur !== null && avance(exterieur) > 0) {
+    const bientot = regleA(piece, new Date(date.getTime() + avance(exterieur) * 60_000));
+    if (bientot && bientot.consigne > ici) return bientot.consigne;
+  }
+  return ici;
 }
 
 /** Hystérésis : n'allume qu'en dessous de consigne − h/2, n'éteint qu'au-dessus de consigne + h/2. */
