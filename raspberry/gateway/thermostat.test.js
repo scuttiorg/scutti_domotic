@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consigneEnVigueur, doitChauffer } from './thermostat.js';
+import { consigneEnVigueur, doitChauffer, mesurePiece } from './thermostat.js';
 
 const piece = {
   mode: 'auto', consigne_defaut: 16, consigne_manuelle: null, manuel_jusqua: null,
@@ -34,3 +34,26 @@ test('hystérésis : conserve l’état dans la bande', () => {
 });
 test('hystérésis : éteint au-dessus de consigne + h/2', () => assert.equal(doitChauffer(19, 19.4, true, 0.5), false));
 test('sans température → jamais chauffer', () => assert.equal(doitChauffer(19, null, true, 0.5), false));
+
+const t0 = Date.parse('2026-10-28T12:00:00Z');
+const il = (min) => new Date(t0 - min * 60_000).toISOString();
+const mesures = new Map([
+  ['salon', { temperature: 20, humidite: 50, le: il(1) }],
+  ['fenetre', { temperature: 17, humidite: 60, le: il(2) }],
+  ['muet', { temperature: 10, humidite: 90, le: il(30) }],
+]);
+const trois = { capteurs: [{ nom: 'salon', compte: true }, { nom: 'fenetre', compte: true }, { nom: 'muet', compte: true }] };
+const vingtMin = 20 * 60_000;
+
+test('plusieurs capteurs : moyenne de ceux qui parlent, muet écarté', () =>
+  assert.deepEqual(mesurePiece({ ...trois, calcul: 'moyenne' }, mesures, t0, vingtMin), { temperature: 18.5, humidite: 55, le: il(1) }));
+test('plusieurs capteurs : le plus froid', () =>
+  assert.equal(mesurePiece({ ...trois, calcul: 'plus_froid' }, mesures, t0, vingtMin).temperature, 17));
+test('un capteur qui ne compte pas est ignoré', () => {
+  const piece = { calcul: 'plus_froid', capteurs: [{ nom: 'salon', compte: true }, { nom: 'fenetre', compte: false }] };
+  assert.equal(mesurePiece(piece, mesures, t0, vingtMin).temperature, 20);
+});
+test('tous les capteurs qui comptent sont muets → aucune mesure', () =>
+  assert.equal(mesurePiece({ capteurs: [{ nom: 'muet', compte: true }] }, mesures, t0, vingtMin), null));
+test('configuration d’avant les listes : `capteur` seul', () =>
+  assert.equal(mesurePiece({ capteur: 'fenetre' }, mesures, t0, vingtMin).temperature, 17));
