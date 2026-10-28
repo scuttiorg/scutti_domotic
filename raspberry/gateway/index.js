@@ -177,7 +177,12 @@ onVu((nom, payload) => {
 /** Ce que chaque type de commande demande au bridge. */
 async function executer(commande) {
   if (commande.type === 'permit_join') {
-    return requeteBridge('permit_join', { time: Number(commande.charge?.time) || 240 });
+    // Une durée nulle FERME la fenêtre : c'est ainsi que Scutti arrête la
+    // recherche. `|| 240` en aurait fait quatre minutes de plus.
+    const time = Number(commande.charge?.time);
+    const duree = Number.isFinite(time) && time >= 0 ? time : 240;
+    appairageJusqua = Date.now() + duree * 1000;
+    return requeteBridge('permit_join', { time: duree });
   }
   if (commande.type === 'rename') {
     return requeteBridge('device/rename', { from: commande.charge?.de, to: commande.charge?.vers });
