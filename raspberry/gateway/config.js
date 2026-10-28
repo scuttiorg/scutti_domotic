@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 if (existsSync('.env')) {
   for (const line of readFileSync('.env', 'utf8').split('\n')) {
@@ -38,4 +39,14 @@ export default {
   appareilsInterval: seconds('APPAREILS_INTERVAL', 300),
   sensorTimeout: seconds('SENSOR_TIMEOUT', 1200),
   cacheFile: 'config.cache.json',
+  // L'état local : ce qui a été réglé sur le boîtier, avec la date de chaque
+  // champ. Il survit au redémarrage, sinon un réglage fait pendant une
+  // coupure serait perdu sans rien dire.
+  // STATE_DIRECTORY est posé par systemd (`StateDirectory=`) : le service
+  // tourne avec ProtectSystem=strict, et c'est le seul dossier où il a le
+  // droit d'écrire. Hors systemd (développement), le dossier courant.
+  etatFile: join(process.env.STATE_DIRECTORY ?? '.', 'local.json'),
+  // L'interface locale, servie sur le réseau du bâtiment. Le boîtier
+  // n'ouvre toujours aucun port vers l'extérieur : c'est lui qui appelle.
+  localPort: Number(process.env.LOCAL_PORT ?? 8080),
 };

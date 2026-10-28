@@ -36,10 +36,19 @@ fi
 echo "→ Mises à jour automatiques"
 dpkg-reconfigure -f noninteractive unattended-upgrades
 
-echo "→ Pare-feu : SSH uniquement"
+echo "→ Pare-feu : SSH, et l'interface locale sur le réseau du bâtiment"
+LOCAL_PORT="${LOCAL_PORT:-8080}"
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow OpenSSH
+# L'interface locale n'est ouverte QUE sur les réseaux privés : c'est elle qui
+# permet de régler le chauffage quand Scutti est injoignable, et elle n'a
+# aucune raison d'être joignable depuis l'extérieur.
+if [ "$LOCAL_PORT" != "0" ]; then
+  for reseau in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+    ufw allow from "$reseau" to any port "$LOCAL_PORT" proto tcp
+  done
+fi
 ufw --force enable
 
 echo "→ SSH par clé uniquement"
@@ -65,12 +74,12 @@ fi
 
 echo "→ Fichiers"
 mkdir -p "$DEST"
-cp -r "$HERE"/{docker-compose.yml,mosquitto,zigbee2mqtt,gateway} "$DEST"/
+cp -r "$HERE"/{docker-compose.yml,mosquitto,zigbee2mqtt,gateway,web} "$DEST"/
 [ -f "$DEST/.env" ] || cp "$HERE/.env.example" "$DEST/.env"
 [ -f "$DEST/gateway/.env" ] || cp "$HERE/gateway/.env.example" "$DEST/gateway/.env"
 touch "$DEST/gateway/config.cache.json"
 chown -R root:chauffage "$DEST"
-chmod 750 "$DEST" "$DEST/gateway"
+chmod 750 "$DEST" "$DEST/gateway" "$DEST/web"
 chmod 640 "$DEST/.env" "$DEST/gateway/.env"
 chmod 660 "$DEST/gateway/config.cache.json"
 

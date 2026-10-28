@@ -1,8 +1,18 @@
 import config from './config.js';
 import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge } from './mqtt.js';
 import { consigneEnVigueur, doitChauffer } from './thermostat.js';
-import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils } from './scutti.js';
+import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger } from './scutti.js';
 import { construireAppareils } from './devices.js';
+import EtatLocal from './local.js';
+import { valeur } from './fusion.js';
+import { demarrerInterfaceLocale } from './web.js';
+
+/** Ce qui a été réglé ICI, avec la date de chaque champ (local.js). */
+const local = new EtatLocal(config.etatFile);
+let dernierEchange = { le: null, ok: false };
+let appairageJusqua = 0;
+/** Le nom du boîtier vient de Scutti : il est posé à la déclaration, là-bas. */
+let nomBoitier = 'Boîtier';
 
 /** pieceUuid -> { piece, temperature, humidite, chauffe, releveLe } */
 const state = new Map();
@@ -30,7 +40,44 @@ function reguler(s) {
   }
 }
 
-function appliquer(pieces) {
+/**
+ * L'échange : ce qui a été réglé ici part, l'état d'après arbitrage revient.
+ *
+ * Il a lieu AVANT la lecture de la configuration : Scutti doit avoir reçu
+ * les réglages locaux avant de dire ce qu'il faut chauffer, sans quoi le
+ * boîtier recevrait l'ancienne valeur et la rejouerait.
+ */
+async function echangerAvecScutti() {
+  const retour = await echanger(local.pourEchange());
+  dernierEchange = { le: new Date().toISOString(), ok: Boolean(retour) };
+  if (retour) local.appliquerRetour(retour);
+}
+
+/**
+ * La pièce telle qu'elle doit être pilotée : la configuration de Scutti,
+ * RECOUVERTE par l'état local.
+ *
+ * Le recouvrement est toujours juste : après un échange réussi, l'état
+ * local EST celui de Scutti, puisqu'on y a rangé la réponse d'après
+ * arbitrage ; pendant une coupure, il porte ce qui a été réglé ici, et
+ * c'est précisément ce qu'on veut appliquer.
+ */
+function recouvrir(piece) {
+  const champs = local.champsPiece(piece.uuid);
+  return {
+    ...piece,
+    nom: valeur(champs, 'nom', piece.nom),
+    mode: valeur(champs, 'mode', piece.mode),
+    consigne_defaut: valeur(champs, 'consigne_defaut', piece.consigne_defaut),
+    hysteresis: valeur(champs, 'hysteresis', piece.hysteresis),
+    consigne_manuelle: valeur(champs, 'consigne_manuelle', piece.consigne_manuelle),
+    manuel_jusqua: valeur(champs, 'manuel_jusqua', piece.manuel_jusqua),
+    actif: valeur(champs, 'actif', true),
+  };
+}
+
+function appliquer(brutes) {
+  const pieces = brutes.map(recouvrir).filter((p) => p.actif !== false);
   const vues = new Set();
   for (const piece of pieces) {
     vues.add(piece.uuid);
@@ -124,12 +171,15 @@ async function traiter(commandes) {
 }
 
 /**
- * Un passage : la configuration, puis les commandes en attente. Le prochain
+ * Un passage : l'échange, la configuration, puis les commandes en attente.
+ * Le prochain
  * passage est programmé ici, rapproché tant que Scutti dit qu'il reste
  * quelque chose à faire.
  */
 async function pull() {
+  await echangerAvecScutti();
   const configuration = await fetchConfiguration();
+  if (configuration?.passerelle?.nom) nomBoitier = configuration.passerelle.nom;
   if (configuration) appliquer(configuration.pieces);
   if (configuration?.commandes_en_attente) await traiter(await fetchCommandes());
   // Après une commande exécutée, on revient vite : le renommage change
@@ -151,6 +201,77 @@ function push() {
     }));
   if (releves.length) pushReleves(releves);
 }
+
+/**
+ * Ce qu'un réglage local a le droit de valoir, avec les MÊMES bornes que le
+ * contrat d'échange. Une valeur hors bornes serait refusée par Scutti, et
+ * refusée pour tout le corps : un seul mauvais réglage rendrait le boîtier
+ * muet jusqu'à ce qu'on efface son état. On refuse donc ici, où la personne
+ * voit la page.
+ *
+ * `undefined` veut dire « rien à poser ».
+ */
+function borner(champ, saisie) {
+  if (champ === 'mode') return ['off', 'auto', 'manuel'].includes(saisie) ? saisie : undefined;
+  if (champ === 'nom') {
+    const nom = String(saisie ?? '').trim().slice(0, 80);
+    return nom || undefined;
+  }
+  const bornes = { consigne_defaut: [5, 30], consigne_manuelle: [5, 30], hysteresis: [0.2, 3] }[champ];
+  if (!bornes) return undefined;
+  const nombre = Number(saisie);
+  if (!Number.isFinite(nombre) || nombre < bornes[0] || nombre > bornes[1]) return undefined;
+  return nombre;
+}
+
+// ── Ce que l'interface locale lit et déclenche ──────────────────────────────
+//
+// Elle ne décide rien : elle montre l'état du boîtier et lui demande des
+// gestes. Tout ce qu'elle écrit passe par l'état local, donc par une date,
+// donc par l'arbitrage.
+
+const contexte = {
+  get nom() { return nomBoitier; },
+  scuttiUrl: config.scutti.url,
+  etatEchange: () => dernierEchange,
+  appairageRestant: () => Math.max(0, Math.round((appairageJusqua - Date.now()) / 1000)),
+
+  pieces: () => [...state.values()].map((s) => ({
+    uuid: s.piece.uuid,
+    nom: s.piece.nom,
+    mode: s.piece.mode,
+    consigne: capteurVivant(s) ? consigneEnVigueur(s.piece) : null,
+    temperature: s.temperature,
+    chauffe: s.chauffe,
+    note: s.releveLe ? `Mesuré ${new Date(s.releveLe).toLocaleTimeString('fr-FR')}` : 'Aucune mesure',
+  })),
+
+  appareils: () => construireAppareils(inventaire, vus).map((a) => ({
+    ...a,
+    libelle: valeur(local.champsAppareil(a.ieee), 'libelle', null),
+  })),
+
+  async reglerPiece(uuid, champ, valeurSaisie) {
+    const posee = borner(champ, valeurSaisie);
+    if (posee === undefined) return;
+    local.poserPiece(uuid, champ, posee);
+    const s = state.get(uuid);
+    if (s) { s.piece = recouvrir(s.piece); reguler(s); }
+  },
+
+  async nommerAppareil(ieee, libelle) {
+    local.poserAppareil(ieee, 'libelle', (libelle ?? '').trim() || null);
+  },
+
+  async appairer() {
+    await requeteBridge('permit_join', { time: 240 });
+    appairageJusqua = Date.now() + 240_000;
+  },
+
+  echanger: echangerAvecScutti,
+};
+
+demarrerInterfaceLocale(contexte, config.localPort);
 
 // Réévaluation périodique : les règles horaires changent sans nouveau relevé.
 setInterval(() => state.forEach(reguler), 60_000);

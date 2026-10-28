@@ -27,7 +27,18 @@ Elle fait tout : Docker, pare-feu (SSH seul), mises à jour automatiques, utilis
 
 **À la main**, si besoin : `sudo ./raspberry/install.sh`, puis renseigner `SCUTTI_URL` et `SCUTTI_TOKEN` dans `/opt/chauffage/gateway/.env`.
 
-Mosquitto n'écoute que sur `127.0.0.1`, et **l'interface web de Zigbee2MQTT est retirée** : l'appairage et le nommage des appareils se font dans scutti, qui écrit des commandes que la passerelle vient chercher. Le Raspberry n'expose donc aucun port hors SSH.
+Mosquitto n'écoute que sur `127.0.0.1`, et **l'interface web de Zigbee2MQTT est retirée** : l'appairage et le nommage des appareils se font dans scutti, qui écrit des commandes que la passerelle vient chercher. Le Raspberry n'ouvre aucun port vers l'extérieur.
+
+## L'interface locale
+
+Le boîtier sert ses trois pages (pièces, appareils, réglages) sur le réseau du bâtiment, à `http://<adresse-du-raspberry>:8080`. Elle existe pour le jour où scutti est injoignable : on y règle une consigne, un mode, on appaire un appareil et on le renomme, sans internet.
+
+- Ouverte par `install.sh` sur les réseaux privés seulement (`10/8`, `172.16/12`, `192.168/16`), jamais vers l'extérieur ; `LOCAL_PORT=0` la coupe.
+- Pas de mot de passe : être sur le réseau du bâtiment EST l'autorisation, comme pour un thermostat au mur. C'est pour cela qu'elle ne sort pas du réseau privé, et qu'elle ne montre ni le jeton ni rien d'un autre espace.
+- Une page sans JavaScript reste utilisable : les boutons suffisent, le script ne fait qu'envoyer le formulaire au changement.
+- Sa feuille de style est une copie engendrée du kit de scutti (`node scripts/kit-boitier.mjs` dans le dépôt scutti), pour que les deux interfaces ne divergent pas.
+
+**Les deux côtés se règlent, aucun ne gagne.** Chaque champ d'une pièce ou d'un appareil voyage avec la date de sa dernière écriture, et la plus récente l'emporte, champ par champ : renommer la pièce dans scutti pendant qu'on change son mode sur le boîtier garde les deux. L'égalité ne renverse pas. L'état local vit dans `/var/lib/chauffage/local.json`, donc un réglage fait pendant une coupure survit au redémarrage et part au retour du réseau.
 
 Tests de la logique : `cd raspberry/gateway && npm test`.
 
@@ -40,6 +51,7 @@ Tests de la logique : `cd raspberry/gateway && npm test`.
 | à chaque changement du réseau Zigbee | `PUT /appareils` : la liste entière, avec le type déduit des `exposes`, le modèle, la batterie et la dernière vue ; au plus toutes les `APPAREILS_INTERVAL` s |
 | à chaque relevé MQTT | calcule la consigne en vigueur et pilote la prise (hystérésis) |
 | toutes les minutes | réévalue les règles horaires, coupe un capteur muet |
+| à chaque passage | `POST /echange` : les pièces et les appareils avec la date de chaque champ, dans les deux sens |
 | toutes les `PUSH_INTERVAL` s | `POST /releves` : température, humidité, état du radiateur, consigne appliquée |
 | à l'arrêt | coupe toutes les prises |
 
@@ -49,4 +61,5 @@ Tests de la logique : `cd raspberry/gateway && npm test`.
 - Code d'installation court, valable trente minutes, à usage unique : c'est lui qui s'échange contre le jeton, et le débit de l'échange est compté par adresse.
 - Relevés MQTT filtrés (plages de valeurs) ; horodatages bornés côté scutti.
 - Raspberry : aucun port exposé hors SSH, MQTT authentifié, service systemd sans privilèges, mises à jour automatiques, SSH par clé.
+- Interface locale sur les réseaux privés seulement, sans secret affiché ; l'état local en 0600, dans le seul dossier où le service a le droit d'écrire.
 - Fail-safe : coupure si capteur muet, coupure à l'arrêt du service.
