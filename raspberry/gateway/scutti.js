@@ -65,6 +65,24 @@ export async function ackCommande(id, erreur = null) {
 }
 
 /**
+ * L'ÉCHANGE : on pose ce qui a été réglé ici, on repart avec l'état
+ * d'après arbitrage. Aucun des deux côtés ne gagne : chaque champ porte sa
+ * date, et la plus récente l'emporte, champ par champ.
+ *
+ * Un échec n'est pas une perte : l'état local garde ses dates, et le
+ * prochain échange les posera. C'est ce qui rend le boîtier utilisable
+ * pendant une coupure.
+ */
+export async function echanger(corps) {
+  try {
+    return await call('POST', '/echange', corps);
+  } catch (e) {
+    console.warn('[scutti] échange impossible :', e.message);
+    return null;
+  }
+}
+
+/**
  * La liste des appareils du réseau Zigbee. Elle REMPLACE la précédente :
  * c'est la passerelle qui sait ce qui est branché, et un appareil retiré
  * doit disparaître des écrans.
