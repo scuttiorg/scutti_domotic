@@ -236,6 +236,11 @@ onVu((nom, payload) => {
   const batterie = typeof payload.battery === 'number' ? payload.battery : precedent.batterie;
   const temperature = typeof payload.temperature === 'number' ? payload.temperature : precedent.temperature;
   vus.set(nom, { batterie, temperature, vuLe: new Date().toISOString() });
+  // La date et la batterie partent elles aussi, au plancher : sans cela,
+  // elles n'arrivaient à Scutti qu'avec un changement du réseau, et un
+  // thermomètre qui parlait toutes les cinq minutes y était dit « muet
+  // depuis 2 h » dès que plus rien n'était appairé ni renommé.
+  planifierAppareils();
   reglerSiBesoin(nom);
 });
 
