@@ -29,8 +29,10 @@ version_installee() { cat "$DEST/VERSION" 2>/dev/null || echo aucune; }
 mqtt_ecoute() { ss -ltn 2>/dev/null | grep -q ':1883 '; }
 
 # La passerelle tient-elle debout ? Active, et pas un seul redémarrage en
-# trente secondes : un service qui plante au démarrage est relancé par
-# systemd toutes les cinq secondes, et « active » seul ne le verrait pas.
+# trois minutes : un service qui plante est relancé par systemd toutes les
+# cinq secondes, et « active » seul ne le verrait pas. Trois minutes, pas
+# trente secondes : une erreur qui ne se déclenche qu'au premier relevé d'un
+# capteur (un import oublié, le 29/10) passerait sinon pour une version saine.
 # Et MQTT écoute, s'il écoutait avant : une version qui le casse est
 # retirée, une version qui le répare passe.
 sain() {
@@ -40,7 +42,7 @@ sain() {
   sleep 5
   local debut
   debut=$(systemctl show chauffage-gateway -p ActiveEnterTimestampMonotonic --value)
-  sleep 30
+  sleep 180
   systemctl is-active --quiet chauffage-gateway \
     && [ "$(systemctl show chauffage-gateway -p ActiveEnterTimestampMonotonic --value)" = "$debut" ] \
     && { [ -z "$MQTT_AVANT" ] || mqtt_ecoute; }
