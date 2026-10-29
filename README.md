@@ -27,14 +27,26 @@ Elle fait tout : Docker, pare-feu (SSH seul), mises à jour automatiques, utilis
 
 **À la main**, si besoin : `sudo ./raspberry/install.sh`, puis renseigner `SCUTTI_URL` et `SCUTTI_TOKEN` dans `/opt/chauffage/gateway/.env`.
 
+`install.sh` se relance sans danger : il ne touche ni aux `.env` (jeton, mot de passe MQTT) ni à `zigbee2mqtt/configuration.yaml`, où Zigbee2MQTT a écrit la clé du réseau et les noms des appareils, et il redémarre un boîtier déjà relié sur le nouveau code.
+
+## Mises à jour et reprise
+
+Le boîtier se débrouille seul, une fois installé.
+
+- **Mise à jour** : toutes les trente minutes, `chauffage-maj.timer` regarde la branche `main` de ce dépôt (public, lu sans identifiants depuis `/opt/chauffage/depot`). Une version nouvelle est posée par `install.sh`. Si la passerelle ne tient pas trente secondes sans redémarrer, le boîtier revient à la précédente et ne retente plus celle-là. Ce qui est fusionné dans `main` arrive donc sur tous les boîtiers dans la demi-heure. Pour ne pas attendre : `sudo systemctl start chauffage-maj`, et `journalctl -u chauffage-maj` pour lire ce qui s'est passé.
+- **Wifi** : l'économie d'énergie du wifi est coupée, et NetworkManager retente la connexion sans fin au lieu d'abandonner après quatre échecs. Toutes les deux minutes, `chauffage-reseau.timer` vérifie que la box répond ; sinon il relance le wifi, et après une demi-heure sans réseau il redémarre le boîtier, au plus une fois toutes les six heures. Sans réseau, la régulation continue sur la dernière configuration connue.
+- **Blocage** : le chien de garde matériel du Raspberry le redémarre si le système ne répond plus pendant quinze secondes, et une panique du noyau redémarre au bout de dix. La passerelle et les conteneurs redémarrent seuls, et le Raspberry repart de lui-même au retour du courant.
+
 Mosquitto n'écoute que sur `127.0.0.1`, et **l'interface web de Zigbee2MQTT est retirée** : l'appairage et le nommage des appareils se font dans scutti, qui écrit des commandes que la passerelle vient chercher. Le Raspberry n'ouvre aucun port vers l'extérieur.
 
 ## L'interface locale
 
-Le boîtier sert ses trois pages (pièces, appareils, réglages) sur le réseau du bâtiment, à `http://<adresse-du-raspberry>:8080`. Elle existe pour le jour où scutti est injoignable : on y règle une consigne, un mode, on appaire un appareil et on le renomme, sans internet.
+Le boîtier sert ses trois pages (pièces, appareils, réglages) sur le réseau du bâtiment, à `https://<nom-du-raspberry>.local:8080`. Elle existe pour le jour où scutti est injoignable : on y règle une consigne, un mode, on appaire un appareil et on le renomme, sans internet.
 
 - Ouverte par `install.sh` sur les réseaux privés seulement (`10/8`, `172.16/12`, `192.168/16`), jamais vers l'extérieur ; `LOCAL_PORT=0` la coupe.
-- Pas de mot de passe : être sur le réseau du bâtiment EST l'autorisation, comme pour un thermostat au mur. C'est pour cela qu'elle ne sort pas du réseau privé, et qu'elle ne montre ni le jeton ni rien d'un autre espace.
+- **Être sur le wifi ne suffit pas.** Un wifi se pirate : l'interface demande un code d'accès, choisi dans scutti (Domotique, « Code d'accès sur place »). Sans code, elle est fermée, et un boîtier neuf l'est donc par défaut. Le boîtier ne reçoit jamais le code, seulement un vérificateur scrypt, dans la configuration qu'il lit avec son jeton ; il le garde en cache, et l'interface de secours s'ouvre donc aussi quand scutti est injoignable.
+- **HTTPS seulement**, avec un certificat engendré sur le boîtier à l'installation (sa clé ne le quitte jamais). Le navigateur demande de l'accepter à la première visite : son empreinte doit être celle que scutti affiche à côté du code, sinon quelqu'un s'est glissé entre les deux.
+- Cinq codes faux en un quart d'heure ferment la connexion, pour tout le boîtier et pas par adresse (changer d'adresse sur un réseau local ne coûte rien). Session dans un cookie `Secure`, `HttpOnly`, `SameSite=Strict`, de douze heures sans visite et sept jours au plus ; un code changé dans scutti met dehors les sessions ouvertes. Formulaires refusés s'ils ne viennent pas d'une page du boîtier, pas de cadre, pas de script étranger, rien en cache.
 - Une page sans JavaScript reste utilisable : les boutons suffisent, le script ne fait qu'envoyer le formulaire au changement.
 - Sa feuille de style est une copie engendrée du kit de scutti (`node scripts/kit-boitier.mjs` dans le dépôt scutti), pour que les deux interfaces ne divergent pas.
 
@@ -61,5 +73,7 @@ Tests de la logique : `cd raspberry/gateway && npm test`.
 - Code d'installation court, valable trente minutes, à usage unique : c'est lui qui s'échange contre le jeton, et le débit de l'échange est compté par adresse.
 - Relevés MQTT filtrés (plages de valeurs) ; horodatages bornés côté scutti.
 - Raspberry : aucun port exposé hors SSH, MQTT authentifié, service systemd sans privilèges, mises à jour automatiques, SSH par clé.
-- Interface locale sur les réseaux privés seulement, sans secret affiché ; l'état local en 0600, dans le seul dossier où le service a le droit d'écrire.
+- Le boîtier installe ce que contient `main` : fusionner dans `main`, c'est déployer sur tous les boîtiers. Le dépôt ne contient aucun secret ; jetons et mots de passe ne vivent que dans les `.env` du boîtier.
+- Interface locale sur les réseaux privés seulement, en HTTPS, derrière un code d'accès dont le boîtier ne connaît que le vérificateur ; l'état local en 0600, dans le seul dossier où le service a le droit d'écrire.
+- SSH : mot de passe refusé dès qu'une clé est posée, par un réglage lu avant tous les autres (`sshd_config.d/00-chauffage.conf`), pour qu'aucun réglage d'usine ne le rouvre.
 - Fail-safe : coupure si capteur muet, coupure à l'arrêt du service.

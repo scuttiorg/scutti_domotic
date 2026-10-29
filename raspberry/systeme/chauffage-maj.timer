@@ -1,0 +1,11 @@
+[Unit]
+Description=Mise à jour du boîtier chauffage, toutes les trente minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+# Plusieurs boîtiers ne vont pas chercher la même version à la même seconde.
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

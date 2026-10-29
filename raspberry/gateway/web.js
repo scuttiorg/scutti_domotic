@@ -16,17 +16,22 @@
 // copie engendrée du kit de Scutti, `web/boitier.js` le seul script, et
 // aucun gestionnaire n'est écrit dans le HTML.
 //
-// PAS D'AUTHENTIFICATION, ET C'EST VOULU : l'autorisation est l'accès au
-// réseau local, comme pour une box ou une imprimante. Mettre un mot de
-// passe sur l'interface de secours, c'est la rendre inutilisable le jour où
-// elle sert. Le boîtier n'est jamais exposé à l'Internet : il n'ouvre aucun
-// port vers l'extérieur, et c'est lui qui appelle Scutti.
+// ÊTRE SUR LE WIFI NE SUFFIT PAS. Un wifi se pirate, et celui qui y entre
+// ne doit pas pouvoir couper le chauffage ni appairer son propre appareil.
+// L'interface demande un code choisi dans Scutti (acces.js), elle est
+// fermée tant qu'il n'y en a pas, et elle ne parle qu'en HTTPS : sur un
+// wifi dont la clé a fuité, le code et la session se liraient en clair.
+// Aucune page, aucun POST ne passe sans session, hormis la page de
+// connexion et les feuilles de style. Le boîtier n'est jamais exposé à
+// l'Internet : il n'ouvre aucun port vers l'extérieur, et c'est lui qui
+// appelle Scutti.
 
-import { createServer } from 'node:http';
+import { createServer } from 'node:https';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { valeur } from './fusion.js';
+import { DUREE_SESSION_SECONDES } from './acces.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 
@@ -219,7 +224,8 @@ function pageReglages(contexte) {
   return page('Réglages du boîtier', `${entete(
     'Réglages du boîtier',
     echapper(contexte.nom),
-    '<a href="/" class="k-button" data-variant="outline">Pièces</a>'
+    `<a href="/" class="k-button" data-variant="outline">Pièces</a>
+        <form method="post" action="/deconnexion"><button type="submit" class="k-button" data-variant="outline">Se déconnecter</button></form>`
   )}
 
     <div class="k-card">
@@ -240,6 +246,36 @@ ${rangee('Horloge', 'C’est elle qui départage deux modifications : elle se r�
             </tbody>
           </table>
         </div>
+      </div>
+    </div>`);
+}
+
+/**
+ * La seule page servie sans session. `message` est écrit ici, jamais repris
+ * de la requête.
+ */
+function pageConnexion(contexte, message = '') {
+  return page('Connexion au boîtier', `${entete('Connexion au boîtier', echapper(contexte.nom), '')}
+
+    <div class="k-card">
+      <div class="k-card-body">
+        <form method="post" action="/connexion" class="boitier-connexion">
+          <label for="code" class="k-field-label">Code d’accès, choisi dans Scutti</label>
+          <div class="k-input"><input id="code" name="code" type="password" autocomplete="current-password" required autofocus></div>
+          ${message ? `<p class="k-page-subtitle" role="alert">${echapper(message)}</p>` : ''}
+          <button type="submit" class="k-button">Entrer</button>
+        </form>
+      </div>
+    </div>`);
+}
+
+/** Sans code posé dans Scutti, rien ne s'ouvre ici. */
+function pageFermee(contexte) {
+  return page('Interface fermée', `${entete('Interface fermée', echapper(contexte.nom), '')}
+
+    <div class="k-card">
+      <div class="k-card-body">
+        <p>Aucun code d’accès n’est défini pour ce boîtier. Choisissez-en un dans Scutti, Domotique, Boîtiers, « Code d’accès sur place » : l’interface s’ouvrira au prochain échange.</p>
       </div>
     </div>`);
 }
@@ -284,29 +320,99 @@ function retour(referer) {
   }
 }
 
+const COOKIE = 'boitier_session';
+
 /**
- * Démarre l'interface locale.
+ * Sur chaque réponse. Le seul script est le nôtre, la page ne s'affiche dans
+ * aucun cadre (un site tiers ne peut pas faire cliquer « Couper » à travers
+ * elle), et rien n'est gardé en cache, pas même la page d'un réglage.
+ * Les `style=""` du gabarit restent permis ; un style ne commande rien.
+ */
+const ENTETES_SURS = {
+  'content-security-policy': "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  'x-frame-options': 'DENY',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'same-origin',
+  'cache-control': 'no-store',
+};
+
+function lireCookie(requete) {
+  for (const morceau of (requete.headers.cookie ?? '').split(';')) {
+    const [nom, ...reste] = morceau.trim().split('=');
+    if (nom === COOKIE) return reste.join('=');
+  }
+  return null;
+}
+
+/**
+ * Un formulaire posté vient-il d'une page du boîtier ? Le cookie est déjà
+ * `SameSite=Strict` ; l'origine vérifiée ferme la porte aux navigateurs qui
+ * l'ignoreraient. Sans en-tête Origin, on refuse : tout navigateur récent
+ * l'envoie sur un POST.
+ */
+const memeOrigine = (requete) => requete.headers.origin === `https://${requete.headers.host}`;
+
+/**
+ * Démarre l'interface locale, en HTTPS seulement.
  *
  * @param contexte ce que les pages lisent et ce qu'elles déclenchent : le
  *   boîtier décide, l'interface ne fait que montrer et demander.
+ * @param options.tls { cert, key } du boîtier (install.sh les engendre).
+ * @param options.acces qui a le droit d'entrer (acces.js).
  */
-export function demarrerInterfaceLocale(contexte, port) {
-  const serveur = createServer(async (requete, reponse) => {
-    const url = new URL(requete.url, 'http://boitier');
+export function demarrerInterfaceLocale(contexte, port, { tls, acces }) {
+  const serveur = createServer(tls, async (requete, reponse) => {
+    const url = new URL(requete.url, 'https://boitier');
     const chemin = url.pathname;
+    for (const [nom, valeurEntete] of Object.entries(ENTETES_SURS)) reponse.setHeader(nom, valeurEntete);
+    const html = (statut, contenu, entetes = {}) => {
+      reponse.writeHead(statut, { 'content-type': 'text/html; charset=utf-8', ...entetes });
+      reponse.end(contenu);
+    };
 
     try {
-      if (requete.method === 'GET') {
-        if (['/kit.css', '/boitier.css', '/boitier.js'].includes(chemin)) {
-          if (fichierStatique(chemin.slice(1), reponse)) return;
+      if (requete.method === 'GET' && ['/kit.css', '/boitier.css', '/boitier.js'].includes(chemin)) {
+        if (fichierStatique(chemin.slice(1), reponse)) return;
+      }
+      if (requete.method === 'POST' && !memeOrigine(requete)) {
+        return reponse.writeHead(403).end('Demande refusée');
+      }
+      if (!acces.ouvert()) return html(503, pageFermee(contexte));
+
+      if (chemin === '/connexion') {
+        if (requete.method === 'GET') return html(200, pageConnexion(contexte));
+        if (requete.method !== 'POST') return reponse.writeHead(405).end('Méthode non admise');
+        const attente = acces.attente();
+        if (attente > 0) {
+          return html(429, pageConnexion(contexte, `Trop d’essais. Réessayez dans ${Math.ceil(attente / 60)} min.`));
         }
+        const jeton = await acces.connecter((await lireCorps(requete)).get('code') ?? '');
+        if (!jeton) return html(401, pageConnexion(contexte, 'Code incorrect.'));
+        return reponse.writeHead(303, {
+          location: '/',
+          'set-cookie': `${COOKIE}=${jeton}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${DUREE_SESSION_SECONDES}`,
+        }).end();
+      }
+
+      if (!acces.valide(lireCookie(requete))) {
+        if (requete.method === 'GET') return reponse.writeHead(303, { location: '/connexion' }).end();
+        return reponse.writeHead(403).end('Connexion requise');
+      }
+
+      if (requete.method === 'GET') {
         const rendu = RENDUS[chemin];
         if (!rendu) return reponse.writeHead(404).end('Page introuvable');
-        reponse.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        return reponse.end(rendu(contexte));
+        return html(200, rendu(contexte));
       }
 
       if (requete.method === 'POST') {
+        if (chemin === '/deconnexion') {
+          acces.deconnecter(lireCookie(requete));
+          return reponse.writeHead(303, {
+            location: '/connexion',
+            'set-cookie': `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`,
+          }).end();
+        }
         const corps = await lireCorps(requete);
         const piece = chemin.match(/^\/pieces\/([0-9a-f-]{36})$/);
         const appareil = chemin.match(/^\/appareils\/([A-Za-z0-9x]{3,32})$/);
@@ -329,6 +435,9 @@ export function demarrerInterfaceLocale(contexte, port) {
     }
   });
 
-  serveur.listen(port, () => console.log(`[web] interface locale sur le port ${serveur.address().port}`));
+  // Une connexion qui traîne n'immobilise pas le boîtier.
+  serveur.headersTimeout = 10_000;
+  serveur.requestTimeout = 15_000;
+  serveur.listen(port, () => console.log(`[web] interface locale sur le port ${serveur.address().port} (https)`));
   return serveur;
 }

@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { X509Certificate } from 'node:crypto';
 
 if (existsSync('.env')) {
   for (const line of readFileSync('.env', 'utf8').split('\n')) {
@@ -16,6 +17,24 @@ const seconds = (key, def) => Number(process.env[key] ?? def) * 1000;
 
 const scuttiUrl = required('SCUTTI_URL').replace(/\/$/, '');
 if (!scuttiUrl.startsWith('https://')) throw new Error('SCUTTI_URL doit être en https://');
+
+/**
+ * Le certificat de l'interface locale, engendré par install.sh. Absent ou
+ * illisible, l'interface ne démarre pas : elle ne parle jamais en clair.
+ * L'empreinte part vers Scutti, qui l'affiche : c'est elle qu'on compare à
+ * celle du navigateur la première fois, pour savoir qu'on parle bien au
+ * boîtier et pas à un intrus posé entre les deux.
+ */
+function lireTls() {
+  const cert = process.env.TLS_CERT ?? '/opt/chauffage/tls/boitier.crt';
+  const key = process.env.TLS_KEY ?? '/opt/chauffage/tls/boitier.key';
+  try {
+    const pem = readFileSync(cert);
+    return { cert: pem, key: readFileSync(key), empreinte: new X509Certificate(pem).fingerprint256 };
+  } catch {
+    return null;
+  }
+}
 
 export default {
   mqtt: {
@@ -50,4 +69,5 @@ export default {
   // L'interface locale, servie sur le réseau du bâtiment. Le boîtier
   // n'ouvre toujours aucun port vers l'extérieur : c'est lui qui appelle.
   localPort: Number(process.env.LOCAL_PORT ?? 8080),
+  tls: lireTls(),
 };

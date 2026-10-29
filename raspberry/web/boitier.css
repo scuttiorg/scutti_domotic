@@ -33,3 +33,17 @@
 .boitier-nom {
   flex: 0 1 22rem;
 }
+
+/* La page de connexion : le champ du code et son bouton, l'un sous l'autre,
+ * à une largeur qui se lit sur un téléphone comme sur un ordinateur. */
+.boitier-connexion {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  max-width: 22rem;
+}
+
+.boitier-connexion .k-input {
+  align-self: stretch;
+}

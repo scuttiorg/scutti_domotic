@@ -1,0 +1,9 @@
+[Unit]
+Description=Garde du réseau du boîtier chauffage, toutes les deux minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

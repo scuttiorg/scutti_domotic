@@ -5,6 +5,8 @@ import config from './config.js';
 const headers = {
   'Content-Type': 'application/json',
   Authorization: `Bearer ${config.scutti.token}`,
+  // Scutti l'affiche à côté du code d'accès (config.js, lireTls).
+  ...(config.tls ? { 'X-Boitier-Empreinte-Tls': config.tls.empreinte } : {}),
 };
 
 // Dispatcher dédié : TLS vérifié, CA interne possible, pas de redirection suivie.
