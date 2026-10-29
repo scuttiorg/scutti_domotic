@@ -86,6 +86,16 @@ else
   echo "   (aucune clé SSH trouvée : mot de passe conservé — ajoute une clé puis relance)"
 fi
 
+echo "→ Journal conservé d'un démarrage à l'autre"
+# Par défaut, Raspberry Pi OS garde le journal en mémoire : après un
+# redémarrage, plus rien ne dit pourquoi le boîtier avait perdu le wifi.
+# Borné, pour ne pas user la carte SD.
+if ecrire_si_change /etc/systemd/journald.conf.d/chauffage.conf "[Journal]
+Storage=persistent
+SystemMaxUse=100M"; then
+  systemctl restart systemd-journald
+fi
+
 echo "→ Tenir debout tout seul"
 # Un boîtier figé (noyau bloqué, carte SD qui ne répond plus) ne se relève
 # pas seul : le chien de garde matériel du Raspberry le redémarre si systemd
