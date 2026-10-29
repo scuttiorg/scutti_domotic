@@ -23,9 +23,16 @@ BRANCHE=main
 
 version_installee() { cat "$DEST/VERSION" 2>/dev/null || echo aucune; }
 
+# Mosquitto écoute-t-il ? La passerelle reste « active » sans lui : elle
+# retente la connexion à chaque seconde, mais ne reçoit plus rien et ne
+# commande plus aucune prise.
+mqtt_ecoute() { ss -ltn 2>/dev/null | grep -q ':1883 '; }
+
 # La passerelle tient-elle debout ? Active, et pas un seul redémarrage en
 # trente secondes : un service qui plante au démarrage est relancé par
 # systemd toutes les cinq secondes, et « active » seul ne le verrait pas.
+# Et MQTT écoute, s'il écoutait avant : une version qui le casse est
+# retirée, une version qui le répare passe.
 sain() {
   # Un boîtier pas encore relié à Scutti ne fait pas tourner la passerelle :
   # il n'y a rien à juger.
@@ -35,7 +42,8 @@ sain() {
   debut=$(systemctl show chauffage-gateway -p ActiveEnterTimestampMonotonic --value)
   sleep 30
   systemctl is-active --quiet chauffage-gateway \
-    && [ "$(systemctl show chauffage-gateway -p ActiveEnterTimestampMonotonic --value)" = "$debut" ]
+    && [ "$(systemctl show chauffage-gateway -p ActiveEnterTimestampMonotonic --value)" = "$debut" ] \
+    && { [ -z "$MQTT_AVANT" ] || mqtt_ecoute; }
 }
 
 # Une seule chaîne : appelée dans un `if`, la fonction ne s'arrête plus à la
@@ -63,6 +71,7 @@ main() {
   [ "$cible" = "$(cat "$DEST/VERSION_REFUSEE" 2>/dev/null)" ] && return 0
 
   echo "mise à jour : ${precedente:0:7} → ${cible:0:7}"
+  MQTT_AVANT=$(mqtt_ecoute && echo oui || true)
   if installer "$cible" && sain; then
     rm -f "$DEST/VERSION_REFUSEE"
     echo "${cible:0:7} installée"
