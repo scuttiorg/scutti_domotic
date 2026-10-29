@@ -39,10 +39,15 @@ export async function fetchConfiguration() {
   }
 }
 
-/** Envoie les relevés et l'état courant de chaque pièce. */
+/** Envoie les relevés et l'état courant de chaque pièce. Rend vrai s'ils sont arrivés. */
 export async function pushReleves(releves) {
-  try { await call('POST', '/releves', { releves }); }
-  catch (e) { console.warn('[scutti] envoi des relevés échoué :', e.message); }
+  try {
+    await call('POST', '/releves', { releves });
+    return true;
+  } catch (e) {
+    console.warn('[scutti] envoi des relevés échoué :', e.message);
+    return false;
+  }
 }
 
 /**

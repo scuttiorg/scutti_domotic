@@ -98,6 +98,47 @@ export function capteursDe(piece) {
   return piece.capteurs?.length ? piece.capteurs : [{ nom: piece.capteur, compte: true }];
 }
 
+/**
+ * Les prises d'une pièce : toutes celles de ses radiateurs, commandées
+ * ensemble (une consigne, une marge, toutes allumées ou toutes éteintes).
+ * Une configuration d'avant les radiateurs ne porte que `prise`.
+ */
+export function prisesDe(piece) {
+  const prises = piece.prises?.length ? piece.prises : [piece.prise];
+  return [...new Set(prises.filter(Boolean))];
+}
+
+/**
+ * Ce qu'une nouvelle configuration demande aux prises, avant toute
+ * régulation : la régulation ne commande les prises qu'au changement
+ * d'état de la pièce, elle ne verrait donc ni une prise retirée ni une
+ * prise ajoutée.
+ *
+ * - Une prise qui ne sert plus à AUCUNE pièce est coupée : sinon son
+ *   radiateur resterait allumé sans plus personne pour l'éteindre.
+ * - Une prise nouvelle pour sa pièce prend l'état de celle-ci (éteinte pour
+ *   une pièce neuve). Une prise passée d'une pièce à une autre n'est donc
+ *   jamais coupée après avoir reçu l'état de la nouvelle, quel que soit
+ *   l'ordre des pièces.
+ *
+ * @param anciennes Map uuid -> { piece, chauffe }, l'état d'avant
+ * @param pieces les pièces de la nouvelle configuration
+ * @returns [prise, allumee][]
+ */
+export function prisesAPoser(anciennes, pieces) {
+  const ordres = new Map();
+  const servent = new Set(pieces.flatMap(prisesDe));
+  for (const s of anciennes.values()) {
+    for (const prise of prisesDe(s.piece)) if (!servent.has(prise)) ordres.set(prise, false);
+  }
+  for (const piece of pieces) {
+    const s = anciennes.get(piece.uuid);
+    const avant = new Set(s ? prisesDe(s.piece) : []);
+    for (const prise of prisesDe(piece)) if (!avant.has(prise)) ordres.set(prise, s ? s.chauffe : false);
+  }
+  return [...ordres];
+}
+
 const moyenne = (valeurs) => Math.round((valeurs.reduce((a, b) => a + b, 0) / valeurs.length) * 10) / 10;
 
 /**

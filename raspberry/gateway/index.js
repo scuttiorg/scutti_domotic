@@ -1,12 +1,13 @@
 import config from './config.js';
 import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge } from './mqtt.js';
-import { consigneEnVigueur, doitChauffer, capteursDe, mesurePiece } from './thermostat.js';
+import { consigneEnVigueur, doitChauffer, capteursDe, prisesDe, prisesAPoser, mesurePiece } from './thermostat.js';
 import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger } from './scutti.js';
 import { construireAppareils, signature } from './devices.js';
 import EtatLocal from './local.js';
 import { valeur } from './fusion.js';
 import { demarrerInterfaceLocale } from './web.js';
 import Acces from './acces.js';
+import Basculements from './basculements.js';
 
 /** Ce qui a été réglé ICI, avec la date de chaque champ (local.js). */
 const local = new EtatLocal(config.etatFile);
@@ -53,6 +54,27 @@ function mesurer(s) {
   if (m) s.releveLe = m.le;
 }
 
+/** Les allumages et extinctions, envoyés à la seconde (basculements.js). */
+const basculements = new Basculements();
+let envoiBasculements = false;
+
+async function envoyerBasculements() {
+  if (envoiBasculements) return;
+  const lot = basculements.aEnvoyer();
+  if (!lot.length) return;
+  envoiBasculements = true;
+  try {
+    if (await pushReleves(lot)) basculements.envoyes(lot.length);
+  } finally {
+    envoiBasculements = false;
+  }
+}
+
+/** Toutes les prises de la pièce, dans le même état. */
+function commander(piece, allume) {
+  for (const prise of prisesDe(piece)) setPlug(prise, allume);
+}
+
 function reguler(s) {
   const vivant = capteurVivant(s);
   mesurer(s);
@@ -61,8 +83,18 @@ function reguler(s) {
   if (vivant && !capteurVivant(s)) console.warn(`[${s.piece.nom}] capteurs muets → coupure de sécurité`);
   if (chauffer !== s.chauffe) {
     s.chauffe = chauffer;
-    setPlug(s.piece.prise, chauffer);
-    console.log(`[${s.piece.nom}] ${s.temperature} °C, consigne ${consigne ?? 'aucune'} → radiateur ${chauffer ? 'ON' : 'OFF'}`);
+    commander(s.piece, chauffer);
+    basculements.noter({
+      piece_uuid: s.piece.uuid,
+      temperature: s.temperature,
+      humidite: s.humidite,
+      chauffe: chauffer,
+      consigne,
+      mesure_le: new Date().toISOString(),
+    });
+    envoyerBasculements();
+    const n = prisesDe(s.piece).length;
+    console.log(`[${s.piece.nom}] ${s.temperature} °C, consigne ${consigne ?? 'aucune'} → ${n > 1 ? `${n} prises` : 'radiateur'} ${chauffer ? 'ON' : 'OFF'}`);
   }
 }
 
@@ -104,26 +136,25 @@ function recouvrir(piece) {
 
 function appliquer(brutes) {
   const pieces = brutes.map(recouvrir).filter((p) => p.actif !== false);
+  // Les prises retirées, ajoutées ou passées d'une pièce à l'autre (thermostat.js).
+  for (const [prise, allumee] of prisesAPoser(state, pieces)) setPlug(prise, allumee);
+
   const vues = new Set();
   for (const piece of pieces) {
     vues.add(piece.uuid);
     const existant = state.get(piece.uuid);
     if (existant) {
-      if (existant.piece.prise !== piece.prise) setPlug(existant.piece.prise, false);
       existant.piece = piece;
       reguler(existant);
     } else {
       state.set(piece.uuid, { piece, temperature: null, humidite: null, chauffe: false, releveLe: null });
-      setPlug(piece.prise, false);
     }
   }
   ecouter(pieces);
-  // Une pièce qui n'est plus dans la configuration (supprimée, désactivée,
-  // espace retiré) : on la coupe et on l'oublie.
-  for (const [uuid, s] of state) {
-    if (vues.has(uuid)) continue;
-    setPlug(s.piece.prise, false);
-    state.delete(uuid);
+  // Une pièce qui n'est plus dans la configuration : ses prises sont déjà
+  // coupées (ou reprises par une autre pièce) ; on l'oublie.
+  for (const uuid of state.keys()) {
+    if (!vues.has(uuid)) state.delete(uuid);
   }
 }
 
@@ -268,6 +299,8 @@ function push() {
       mesure_le: s.releveLe,
     }));
   if (releves.length) pushReleves(releves);
+  // Ceux qu'une coupure a retenus repartent avec le relevé périodique.
+  envoyerBasculements();
 }
 
 /**
@@ -355,7 +388,7 @@ setInterval(push, config.pushInterval);
 // Arrêt propre : tout couper avant de quitter.
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
-    state.forEach((s) => setPlug(s.piece.prise, false));
+    state.forEach((s) => commander(s.piece, false));
     setTimeout(() => process.exit(0), 500);
   });
 }
