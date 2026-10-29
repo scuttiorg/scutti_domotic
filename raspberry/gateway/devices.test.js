@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deduireType, construireAppareils } from './devices.js';
+import { deduireType, construireAppareils, signature } from './devices.js';
 
 test('un appareil qui mesure une température est un capteur', () => {
   const definition = { exposes: [{ property: 'temperature', access: 1 }, { property: 'battery', access: 1 }] };
@@ -58,4 +58,24 @@ test('un appareil dont on n’a rien entendu n’invente ni batterie ni date', (
   assert.equal(appareil.batterie, null);
   assert.equal(appareil.vu_le, null);
   assert.equal(appareil.type, 'prise');
+});
+
+test('la batterie et la date de dernière vue ne changent pas la signature', () => {
+  const avant = [{ ieee: '0x0002', nom_z2m: 'atelier/thermo', type: 'capteur', modele: 'SNZB-02', batterie: 72, vu_le: '2026-10-28T10:00:00Z' }];
+  const apres = [{ ...avant[0], batterie: 71, vu_le: '2026-10-28T10:05:00Z' }];
+  assert.equal(signature(avant), signature(apres));
+});
+
+test('un appareil qui arrive, puis qui livre son modèle, change la signature à chaque fois', () => {
+  const avant = [{ ieee: '0x0002', nom_z2m: 'atelier/thermo', type: 'capteur', modele: 'SNZB-02' }];
+  const arrive = [...avant, { ieee: '0x0003', nom_z2m: '0x0003', type: 'autre', modele: null }];
+  const interroge = [...avant, { ieee: '0x0003', nom_z2m: '0x0003', type: 'capteur', modele: 'SNZB-02' }];
+  assert.notEqual(signature(avant), signature(arrive));
+  assert.notEqual(signature(arrive), signature(interroge));
+});
+
+test('l’ordre de la liste ne change pas la signature', () => {
+  const a = { ieee: '0x0002', nom_z2m: 'a', type: 'capteur', modele: null };
+  const b = { ieee: '0x0003', nom_z2m: 'b', type: 'prise', modele: null };
+  assert.equal(signature([a, b]), signature([b, a]));
 });
