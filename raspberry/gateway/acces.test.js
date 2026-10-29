@@ -30,6 +30,14 @@ test('un code saisi sous une autre forme Unicode est le même code', async () =>
   assert.equal(await verifierCode('café-de-la-calade', v), true);
 });
 
+test('les espaces de bord ne comptent pas, comme dans Scutti', async () => {
+  // Scutti calcule le vérificateur sur le code débarrassé de ses espaces de bord.
+  const v = verificateurPour('code-du-hall');
+  assert.equal(await verifierCode('  code-du-hall ', v), true);
+  assert.equal(await verifierCode('code du hall', v), false);
+  assert.equal(await verifierCode('   ', v), false);
+});
+
 test('un vérificateur abîmé ou démesuré ne vérifie rien', async () => {
   const bon = verificateurPour('un-code-solide');
   const [, , r, p, sel, empreinte] = bon.split('$');

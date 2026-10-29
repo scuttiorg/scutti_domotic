@@ -41,12 +41,19 @@ function lireVerificateur(verificateur) {
   return { N, r, p, sel, empreinte };
 }
 
-/** Le code saisi correspond-il au vérificateur ? En temps constant. */
+/**
+ * Le code saisi correspond-il au vérificateur ? En temps constant.
+ *
+ * Débarrassé de ses espaces de bord, comme Scutti le fait avant de calculer
+ * le vérificateur : une espace laissée par le clavier d'un téléphone ne doit
+ * pas refuser le bon code.
+ */
 export function verifierCode(code, verificateur) {
   const v = lireVerificateur(verificateur);
-  if (!v || typeof code !== 'string' || !code) return Promise.resolve(false);
+  const saisi = typeof code === 'string' ? code.trim() : '';
+  if (!v || !saisi) return Promise.resolve(false);
   return new Promise((resolve) => {
-    scrypt(code.normalize('NFC'), v.sel, v.empreinte.length,
+    scrypt(saisi.normalize('NFC'), v.sel, v.empreinte.length,
       { N: v.N, r: v.r, p: v.p, maxmem: 256 * v.N * v.r },
       (erreur, calcule) => resolve(!erreur && timingSafeEqual(calcule, v.empreinte)));
   });
