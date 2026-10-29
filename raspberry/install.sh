@@ -38,7 +38,7 @@ ecrire_si_change() {
 if [ -z "$MISE_A_JOUR" ]; then
   echo "→ Paquets"
   apt-get update -q
-  apt-get install -y -q curl git rsync ufw unattended-upgrades mosquitto-clients
+  apt-get install -y -q curl git openssl rsync ufw unattended-upgrades mosquitto-clients
 
   echo "→ Docker (dépôt officiel : le paquet compose n'est pas dans Raspberry Pi OS)"
   if ! command -v docker >/dev/null 2>&1; then
@@ -73,8 +73,15 @@ ufw --force enable
 
 echo "→ SSH par clé uniquement"
 if [ -s /root/.ssh/authorized_keys ] || ls /home/*/.ssh/authorized_keys >/dev/null 2>&1; then
-  sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-  systemctl reload ssh
+  # Dans sshd_config.d, et en tête : sshd garde la PREMIÈRE valeur lue, et
+  # ce dossier est lu avant sshd_config. Un `PasswordAuthentication yes`
+  # posé là par l'outil de préparation de la carte SD l'emportait sur la
+  # ligne réglée dans sshd_config, et le mot de passe restait accepté.
+  if ecrire_si_change /etc/ssh/sshd_config.d/00-chauffage.conf "PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password"; then
+    sshd -t && systemctl reload ssh
+  fi
 else
   echo "   (aucune clé SSH trouvée : mot de passe conservé — ajoute une clé puis relance)"
 fi
@@ -145,8 +152,22 @@ touch "$DEST/gateway/config.cache.json"
 # git (une archive copiée à la main), elle est inconnue, et la prochaine
 # mise à jour réinstalle main.
 git -C "$HERE" rev-parse HEAD 2>/dev/null > "$DEST/VERSION" || echo inconnue > "$DEST/VERSION"
+
+echo "→ Certificat de l'interface locale"
+# L'interface ne parle qu'en HTTPS. Le certificat est engendré une fois, ici :
+# la clé privée ne quitte jamais le boîtier, et le recréer changerait
+# l'empreinte que les navigateurs ont acceptée et que Scutti affiche.
+mkdir -p "$DEST/tls"
+if [ ! -s "$DEST/tls/boitier.key" ] || [ ! -s "$DEST/tls/boitier.crt" ]; then
+  NOM=$(hostname)
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+    -subj "/CN=$NOM.local" -addext "subjectAltName=DNS:$NOM.local,DNS:$NOM" \
+    -keyout "$DEST/tls/boitier.key" -out "$DEST/tls/boitier.crt" 2>/dev/null
+fi
+
 chown -R root:chauffage "$DEST"
-chmod 750 "$DEST" "$DEST/gateway" "$DEST/web"
+chmod 750 "$DEST" "$DEST/gateway" "$DEST/web" "$DEST/tls"
+chmod 640 "$DEST/tls/boitier.key"
 chmod 640 "$DEST/.env" "$DEST/gateway/.env"
 chmod 660 "$DEST/gateway/config.cache.json"
 
@@ -226,4 +247,8 @@ EOF
 else
   echo
   echo "Terminé. Le boîtier tourne sur la version ${MISE_A_JOUR:+mise à jour }$(cut -c1-7 "$DEST/VERSION")."
+fi
+if [ "$LOCAL_PORT" != "0" ]; then
+  echo "Interface locale : https://$(hostname).local:$LOCAL_PORT, avec le code d'accès choisi dans Scutti."
+  echo "Empreinte du certificat : $(openssl x509 -noout -fingerprint -sha256 -in "$DEST/tls/boitier.crt" | cut -d= -f2)"
 fi

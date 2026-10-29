@@ -6,6 +6,7 @@ import { construireAppareils, signature } from './devices.js';
 import EtatLocal from './local.js';
 import { valeur } from './fusion.js';
 import { demarrerInterfaceLocale } from './web.js';
+import Acces from './acces.js';
 
 /** Ce qui a été réglé ICI, avec la date de chaque champ (local.js). */
 const local = new EtatLocal(config.etatFile);
@@ -13,6 +14,12 @@ let dernierEchange = { le: null, ok: false };
 let appairageJusqua = 0;
 /** Le nom du boîtier vient de Scutti : il est posé à la déclaration, là-bas. */
 let nomBoitier = 'Boîtier';
+/**
+ * Le vérificateur du code d'accès local, posé dans Scutti (acces.js). Il
+ * vient de la configuration, donc du cache quand Scutti est injoignable :
+ * l'interface de secours reste ouverte à qui a le code. Null : fermée.
+ */
+let verificateurLocal = null;
 
 /** pieceUuid -> { piece, temperature, humidite, chauffe, releveLe } */
 const state = new Map();
@@ -240,6 +247,7 @@ async function pull() {
   await echangerAvecScutti();
   const configuration = await fetchConfiguration();
   if (configuration?.passerelle?.nom) nomBoitier = configuration.passerelle.nom;
+  if (configuration) verificateurLocal = configuration.acces_local?.verificateur ?? null;
   if (configuration) appliquer(configuration.pieces);
   if (configuration?.commandes_en_attente) await traiter(await fetchCommandes());
   // Après une commande exécutée, on revient vite : le renommage change
@@ -331,7 +339,14 @@ const contexte = {
   echanger: echangerAvecScutti,
 };
 
-demarrerInterfaceLocale(contexte, config.localPort);
+if (config.localPort === 0) {
+  console.log('[web] interface locale coupée (LOCAL_PORT=0)');
+} else if (!config.tls) {
+  console.warn('[web] aucun certificat lisible : interface locale coupée (relancer install.sh)');
+} else {
+  console.log(`[web] empreinte du certificat : ${config.tls.empreinte}`);
+  demarrerInterfaceLocale(contexte, config.localPort, { tls: config.tls, acces: new Acces(() => verificateurLocal) });
+}
 
 // Réévaluation périodique : les règles horaires changent sans nouveau relevé.
 setInterval(() => state.forEach(reguler), 60_000);
