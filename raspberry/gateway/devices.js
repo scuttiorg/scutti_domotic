@@ -61,3 +61,21 @@ export function construireAppareils(devices, vus = new Map()) {
       };
     });
 }
+
+/**
+ * Ce qui, dans la liste, décrit le RÉSEAU : qui est là, sous quel nom, de
+ * quel type. La batterie et la date de dernière vue en sont exclues : elles
+ * changent à chaque relevé, et c'est pour elles seules que vaut le plancher
+ * entre deux envois.
+ *
+ * Un appareil qui vient d'être appairé change cette signature deux fois :
+ * à son arrivée, puis quand Zigbee2MQTT a fini de l'interroger et connaît
+ * son modèle. Les deux doivent partir tout de suite, sinon Scutti le
+ * montrerait cinq minutes comme « autre ».
+ */
+export function signature(appareils) {
+  return (appareils ?? [])
+    .map((a) => [a.ieee, a.nom_z2m, a.type, a.modele ?? ''].join('|'))
+    .sort()
+    .join('\n');
+}
