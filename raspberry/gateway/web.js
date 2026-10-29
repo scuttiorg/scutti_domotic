@@ -30,7 +30,6 @@ import { createServer } from 'node:https';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { valeur } from './fusion.js';
 import { DUREE_SESSION_SECONDES } from './acces.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');

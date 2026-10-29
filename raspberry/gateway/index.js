@@ -8,6 +8,7 @@ import { valeur } from './fusion.js';
 import { demarrerInterfaceLocale } from './web.js';
 import Acces from './acces.js';
 import Basculements from './basculements.js';
+import { reglagesManquants, ENTRE_DEUX_ESSAIS } from './rapports.js';
 
 /** Ce qui a été réglé ICI, avec la date de chaque champ (local.js). */
 const local = new EtatLocal(config.etatFile);
@@ -235,7 +236,57 @@ onVu((nom, payload) => {
   const batterie = typeof payload.battery === 'number' ? payload.battery : precedent.batterie;
   const temperature = typeof payload.temperature === 'number' ? payload.temperature : precedent.temperature;
   vus.set(nom, { batterie, temperature, vuLe: new Date().toISOString() });
+  reglerSiBesoin(nom);
 });
+
+// ── Des capteurs qui parlent plus souvent (rapports.js) ─────────────────────
+
+/** nom -> date du dernier essai ; les capteurs déjà réglés depuis le démarrage. */
+const essaisDeReglage = new Map();
+const capteursRegles = new Set();
+let fileDeReglages = Promise.resolve();
+
+// Zigbee2MQTT 2 a renommé la requête ; le boîtier ne sait pas quelle version
+// tourne dans le conteneur. Un bridge qui ne connaît pas un sujet ne répond
+// pas : on essaie le nom d'aujourd'hui, puis celui d'avant, et on retient
+// celui qui a répondu.
+const SUJETS_REGLAGE = ['device/reporting/configure', 'device/configure_reporting'];
+let sujetReglage = null;
+
+async function demanderReglage(reglage) {
+  let derniere;
+  for (const sujet of sujetReglage ? [sujetReglage] : SUJETS_REGLAGE) {
+    try {
+      await requeteBridge(sujet, reglage, 30_000);
+      sujetReglage = sujet;
+      return;
+    } catch (e) {
+      derniere = e;
+      // Une réponse, même un refus, dit que le sujet existe.
+      if (!e.message.includes('n’a pas répondu')) { sujetReglage = sujet; throw e; }
+    }
+  }
+  throw derniere;
+}
+
+/**
+ * Un capteur dont une pièce se sert vient de parler : il est éveillé, c'est
+ * le moment de lui demander d'envoyer plus souvent, s'il le faut.
+ */
+function reglerSiBesoin(nom) {
+  if (!mesures.has(nom) || capteursRegles.has(nom)) return;
+  const manquants = reglagesManquants(inventaire.find((a) => a.friendly_name === nom));
+  if (!manquants.length) { capteursRegles.add(nom); return; }
+  if (Date.now() - (essaisDeReglage.get(nom) ?? 0) < ENTRE_DEUX_ESSAIS) return;
+  essaisDeReglage.set(nom, Date.now());
+  fileDeReglages = fileDeReglages
+    .then(async () => {
+      for (const reglage of manquants) await demanderReglage(reglage);
+      capteursRegles.add(nom);
+      console.log(`[capteurs] ${nom} : mesure envoyée dès 0,25 °C (3 % d’humidité) d’écart, et au moins toutes les 5 min`);
+    })
+    .catch((e) => console.warn(`[capteurs] ${nom} pas encore réglé (${e.message}) : nouvel essai à un prochain réveil`));
+}
 
 // ── Les commandes venues de Scutti ──────────────────────────────────────────
 

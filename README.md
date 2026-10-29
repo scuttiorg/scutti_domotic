@@ -33,7 +33,7 @@ Elle fait tout : Docker, pare-feu (SSH seul), mises à jour automatiques, utilis
 
 Le boîtier se débrouille seul, une fois installé.
 
-- **Mise à jour** : toutes les trente minutes, `chauffage-maj.timer` regarde la branche `main` de ce dépôt (public, lu sans identifiants depuis `/opt/chauffage/depot`). Une version nouvelle est posée par `install.sh`. Si la passerelle ne tient pas trente secondes sans redémarrer, le boîtier revient à la précédente et ne retente plus celle-là. Ce qui est fusionné dans `main` arrive donc sur tous les boîtiers dans la demi-heure. Pour ne pas attendre : `sudo systemctl start chauffage-maj`, et `journalctl -u chauffage-maj` pour lire ce qui s'est passé.
+- **Mise à jour** : toutes les trente minutes, `chauffage-maj.timer` regarde la branche `main` de ce dépôt (public, lu sans identifiants depuis `/opt/chauffage/depot`). Une version nouvelle est posée par `install.sh`. Si la passerelle ne tient pas trois minutes sans redémarrer, ou si MQTT tombe alors qu'il marchait, le boîtier revient à la précédente et ne retente plus celle-là. Ce qui est fusionné dans `main` arrive donc sur tous les boîtiers dans la demi-heure. Pour ne pas attendre : `sudo systemctl start chauffage-maj`, et `journalctl -u chauffage-maj` pour lire ce qui s'est passé.
 - **Wifi** : l'économie d'énergie du wifi est coupée, et NetworkManager retente la connexion sans fin au lieu d'abandonner après quatre échecs. Toutes les deux minutes, `chauffage-reseau.timer` vérifie que la box répond ; sinon il relance le wifi, et après une demi-heure sans réseau il redémarre le boîtier, au plus une fois toutes les six heures. Sans réseau, la régulation continue sur la dernière configuration connue.
 - **Blocage** : le chien de garde matériel du Raspberry le redémarre si le système ne répond plus pendant quinze secondes, et une panique du noyau redémarre au bout de dix. La passerelle et les conteneurs redémarrent seuls, et le Raspberry repart de lui-même au retour du courant.
 
@@ -52,7 +52,7 @@ Le boîtier sert ses trois pages (pièces, appareils, réglages) sur le réseau 
 
 **Les deux côtés se règlent, aucun ne gagne.** Chaque champ d'une pièce ou d'un appareil voyage avec la date de sa dernière écriture, et la plus récente l'emporte, champ par champ : renommer la pièce dans scutti pendant qu'on change son mode sur le boîtier garde les deux. L'égalité ne renverse pas. L'état local vit dans `/var/lib/chauffage/local.json`, donc un réglage fait pendant une coupure survit au redémarrage et part au retour du réseau.
 
-Tests de la logique : `cd raspberry/gateway && npm test`.
+Tests de la logique : `cd raspberry/gateway && npm install && npm test` (le lint d'abord : un nom oublié dans un import ne se voit qu'au premier message qui passe par lui).
 
 ## Ce que la passerelle fait
 
@@ -64,6 +64,7 @@ Tests de la logique : `cd raspberry/gateway && npm test`.
 | à chaque relevé MQTT | calcule la consigne en vigueur et pilote ensemble toutes les prises de la pièce (un ou plusieurs radiateurs, une ou plusieurs prises chacun), avec la marge de régulation (hystérésis) |
 | à chaque allumage ou extinction | `POST /releves` aussitôt, horodaté à la seconde : c'est ce que le graphique de Scutti montre ; hors ligne, gardé et renvoyé au retour (jusqu'à 23 h) |
 | toutes les minutes | réévalue les règles horaires, coupe un capteur muet |
+| quand un capteur d'une pièce parle | s'il n'est pas déjà réglé ainsi, lui demande (il est éveillé à cet instant) d'envoyer sa mesure dès 0,25 °C ou 3 % d'humidité d'écart, et au moins toutes les 5 min ; un échec se retente à un réveil suivant, au plus toutes les 10 min |
 | à chaque passage | `POST /echange` : les pièces et les appareils avec la date de chaque champ, dans les deux sens |
 | toutes les `PUSH_INTERVAL` s | `POST /releves` : température, humidité, état du radiateur, consigne appliquée |
 | quand une prise quitte une pièce | coupée, sauf si une autre pièce la reprend ; une prise ajoutée prend l'état de sa pièce |
