@@ -65,3 +65,31 @@ test('ce qui part à l’échange porte chaque champ avec sa date', () => {
   assert.equal(pieces[0].uuid, 'p1');
   assert.ok(pieces[0].champs.mode.le);
 });
+
+test('la vitesse de chauffe apprise survit au redémarrage, et ne part pas à l’échange', () => {
+  const fichier = fichierNeuf();
+  const avant = new EtatLocal(fichier);
+  avant.poserVitesse('p1', 1.8);
+  const apres = new EtatLocal(fichier);
+  assert.equal(apres.vitesse('p1'), 1.8);
+  assert.equal(apres.vitesse('p2'), null);
+  assert.deepEqual(Object.keys(apres.pourEchange()), ['pieces', 'appareils']);
+});
+
+test('le retour de l’échange garde la vitesse des pièces qui restent, oublie celle des pièces supprimées', () => {
+  const etat = new EtatLocal(fichierNeuf());
+  etat.poserVitesse('p1', 1.8);
+  etat.poserVitesse('p2', 2.4);
+  etat.appliquerRetour({ pieces: [{ uuid: 'p2', champs: {} }], appareils: [] });
+  assert.equal(etat.vitesse('p1'), null);
+  assert.equal(etat.vitesse('p2'), 2.4);
+});
+
+test('un état d’avant les vitesses se lit, sans vitesse', () => {
+  const fichier = fichierNeuf();
+  writeFileSync(fichier, JSON.stringify({ pieces: { p1: {} }, appareils: {} }));
+  const etat = new EtatLocal(fichier);
+  assert.equal(etat.vitesse('p1'), null);
+  etat.poserVitesse('p1', 0.9);
+  assert.equal(JSON.parse(readFileSync(fichier, 'utf8')).vitesses.p1, 0.9);
+});

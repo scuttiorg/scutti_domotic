@@ -25,8 +25,12 @@ export function heureMurale(date) {
 }
 
 export function regleCouvre(regle, date) {
+  return couvre(regle, heureMurale(date));
+}
+
+/** La même chose, l'heure murale déjà lue : l'avance apprise en lit une par minute, pas une par règle. */
+function couvre(regle, { jour, minutes: maintenant }) {
   if (!regle.actif) return false;
-  const { jour, minutes: maintenant } = heureMurale(date);
   const debut = enMinutes(regle.heure_debut);
   const fin = enMinutes(regle.heure_fin);
   if (debut <= fin) return regle.jours.includes(jour) && maintenant >= debut && maintenant < fin;
@@ -47,7 +51,7 @@ export function seuilExterieur(piece) {
   const seuil = piece.seuil_exterieur;
   return typeof seuil === 'number' && Number.isFinite(seuil) ? seuil : SEUIL_DOUX;
 }
-/** L'avance la plus longue, par grand froid. */
+/** L'avance la plus longue, par grand froid, tant que la pièce n'a pas appris sa vitesse. */
 export const AVANCE_MAX = 45;
 /** Une température extérieure plus vieille ne compte plus (Scutti injoignable). */
 const EXTERIEUR_VALIDE_MS = 3 * 3_600_000;
@@ -57,21 +61,94 @@ export function avance(exterieur) {
   return Math.min(AVANCE_MAX, Math.max(0, Math.round((15 - exterieur) * 3)));
 }
 
+// ── L'avance apprise ────────────────────────────────────────────────────────
+//
+// Le boîtier mesure ce que chaque pièce gagne par heure de chauffe
+// (vitesse.js). Une fois cette vitesse connue, l'avance n'est plus une règle
+// fixe : c'est le temps qu'il faut, à cette vitesse, pour monter de la
+// température actuelle à la consigne de la plage qui arrive. Une pièce
+// froide part plus tôt, une pièce déjà chaude attend son heure.
+//
+// Le froid du dehors n'y entre pas : il est déjà dans la température de la
+// pièce (plus basse quand il gèle) et dans la vitesse elle-même, une moyenne
+// des dernières chauffes, donc mesurée par le temps qu'il fait ces jours-ci.
+// Une correction par degré extérieur demanderait d'apprendre une pente de
+// plus, sur trop peu de chauffes pour qu'elle soit juste ; la borne de trois
+// heures garde l'erreur petite.
+
+/** Ce qu'une pièce peut gagner par heure de chauffe, au moins et au plus (°C/h). */
+export const VITESSE_MIN = 0.2;
+export const VITESSE_MAX = 5;
+/** L'avance apprise la plus longue, en minutes. */
+export const AVANCE_APPRISE_MAX = 180;
+
+/** La vitesse si elle est plausible, sinon null (rien d'appris : la règle fixe). */
+export function vitesseValide(vitesse) {
+  return typeof vitesse === 'number' && Number.isFinite(vitesse) && vitesse >= VITESSE_MIN && vitesse <= VITESSE_MAX
+    ? vitesse : null;
+}
+
+/** Les minutes qu'il faut pour monter de `temperature` à `cible` à `vitesse` °C/h, trois heures au plus. */
+export function avanceApprise(temperature, cible, vitesse) {
+  return Math.min(AVANCE_APPRISE_MAX, Math.max(0, Math.ceil(((cible - temperature) / vitesse) * 60)));
+}
+
 function exterieurDe(exterieur, date) {
   if (!exterieur) return null;
   return date - Date.parse(exterieur.le) < EXTERIEUR_VALIDE_MS ? exterieur.temperature : null;
 }
 
-const regleA = (piece, date) => [...piece.regles]
-  .sort((a, b) => a.priorite - b.priorite)
-  .find((r) => regleCouvre(r, date));
+const parPriorite = (regles) => [...regles].sort((a, b) => a.priorite - b.priorite);
+const premiereQuiCouvre = (triees, date) => {
+  const murale = heureMurale(date);
+  return triees.find((r) => couvre(r, murale));
+};
+const regleA = (piece, date) => premiereQuiCouvre(parPriorite(piece.regles), date);
+
+/**
+ * La plage plus chaude qui doit déjà démarrer, ou undefined.
+ *
+ * Vitesse apprise et température connues : la première plage, minute par
+ * minute dans les trois heures qui viennent, qui vise plus haut que `ici` et
+ * que la pièce n'aurait pas le temps d'atteindre en partant plus tard.
+ * Sinon, la règle fixe : celle qui couvre l'instant dans `avance(exterieur)`.
+ */
+function plageEnAvance(piece, date, ici, exterieur, temperature) {
+  const vitesse = vitesseValide(piece.vitesse_chauffe);
+  if (vitesse !== null && typeof temperature === 'number') {
+    const triees = parPriorite(piece.regles);
+    for (let minutes = 1; minutes <= AVANCE_APPRISE_MAX; minutes++) {
+      const plage = premiereQuiCouvre(triees, new Date(date.getTime() + minutes * 60_000));
+      if (plage && plage.consigne > ici && minutes <= avanceApprise(temperature, plage.consigne, vitesse)) return plage;
+    }
+    return undefined;
+  }
+  if (exterieur === null || avance(exterieur) <= 0) return undefined;
+  const bientot = regleA(piece, new Date(date.getTime() + avance(exterieur) * 60_000));
+  return bientot && bientot.consigne > ici ? bientot : undefined;
+}
+
+/**
+ * Une fenêtre est ouverte (fenetre.js) : la pièce est coupée jusqu'à
+ * `fenetre_jusqua`, si elle a gardé l'option.
+ */
+export function fenetreOuverte(piece, date) {
+  return piece.coupure_fenetre !== false && typeof piece.fenetre_jusqua === 'string'
+    && Date.parse(piece.fenetre_jusqua) > date.getTime();
+}
 
 /**
  * La consigne en vigueur (null = radiateur coupé). La température
- * extérieure vient de Scutti, avec la configuration de la pièce.
+ * extérieure vient de Scutti, avec la configuration de la pièce ;
+ * `fenetre_jusqua` et `vitesse_chauffe` viennent du boîtier lui-même, et
+ * `temperature` est celle de la pièce, pour l'avance apprise.
+ *
+ * Une fenêtre ouverte coupe même le manuel : chauffer vers dehors ne sert
+ * personne, et la coupure s'arrête seule.
  */
-export function consigneEnVigueur(piece, date = new Date()) {
+export function consigneEnVigueur(piece, date = new Date(), temperature = null) {
   if (piece.mode === 'off') return null;
+  if (fenetreOuverte(piece, date)) return null;
 
   if (piece.mode === 'manuel' && piece.consigne_manuelle !== null) {
     const echu = piece.manuel_jusqua !== null && new Date(piece.manuel_jusqua) < date;
@@ -83,10 +160,10 @@ export function consigneEnVigueur(piece, date = new Date()) {
 
   const regle = regleA(piece, date);
   const ici = regle ? regle.consigne : piece.consigne_defaut;
-  // Par temps froid, une plage plus chaude qui commence bientôt démarre maintenant.
-  if (piece.anticipation && exterieur !== null && avance(exterieur) > 0) {
-    const bientot = regleA(piece, new Date(date.getTime() + avance(exterieur) * 60_000));
-    if (bientot && bientot.consigne > ici) return bientot.consigne;
+  // Une plage plus chaude qui commence bientôt démarre maintenant.
+  if (piece.anticipation) {
+    const bientot = plageEnAvance(piece, date, ici, exterieur, temperature);
+    if (bientot) return bientot.consigne;
   }
   return ici;
 }

@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consigneEnVigueur, doitChauffer, mesurePiece, avance, prisesDe, prisesAPoser, seuilExterieur } from './thermostat.js';
+import {
+  consigneEnVigueur, doitChauffer, mesurePiece, avance, prisesDe, prisesAPoser, seuilExterieur,
+  avanceApprise, vitesseValide, fenetreOuverte, AVANCE_APPRISE_MAX,
+} from './thermostat.js';
 
 const piece = {
   mode: 'auto', consigne_defaut: 16, consigne_manuelle: null, manuel_jusqua: null,
@@ -129,4 +132,81 @@ test('une prise passée d’une pièce à l’autre prend l’état de la nouvel
 test('une pièce supprimée : ses prises coupées, sauf celles reprises ailleurs', () => {
   const avant = new Map([etat('p1', ['a', 'b'], true), etat('p2', ['c'], false)]);
   assert.deepEqual(prisesAPoser(avant, [{ uuid: 'p2', prises: ['c', 'b'] }]), [['a', false], ['b', false]]);
+});
+
+// ── L'avance apprise ────────────────────────────────────────────────────────
+//
+// MÊMES CAS que tests/unit/modules/domotique/consigne.test.js dans Scutti :
+// la règle doit être identique des deux côtés.
+
+// Mardi 27 octobre à Paris : la plage de semaine (19 °C) commence à 7 h 00,
+// la consigne par défaut est 16 °C.
+const paris = (hhmm) => new Date(`2026-10-27T${hhmm}:00+01:00`);
+const apprise = (vitesse, autres = {}) => ({ ...piece, anticipation: true, vitesse_chauffe: vitesse, ...autres });
+
+test('avance apprise : le temps de monter à la consigne, à la vitesse de la pièce, trois heures au plus', () => {
+  assert.equal(avanceApprise(16, 19, 2), 90);
+  assert.equal(avanceApprise(18.5, 19, 2), 15);
+  assert.equal(avanceApprise(19, 19, 2), 0);
+  assert.equal(avanceApprise(20, 19, 2), 0);
+  assert.equal(avanceApprise(10, 19, 0.2), AVANCE_APPRISE_MAX);
+  assert.equal(AVANCE_APPRISE_MAX, 180);
+});
+
+test('une vitesse hors de 0,2 à 5 °C/h, ou illisible, ne compte pas', () => {
+  assert.equal(vitesseValide(1.8), 1.8);
+  assert.equal(vitesseValide(0.2), 0.2);
+  assert.equal(vitesseValide(5), 5);
+  for (const faux of [0.1, 5.5, -1, '2', null, undefined, NaN]) assert.equal(vitesseValide(faux), null);
+});
+
+test('à 2 °C/h, une pièce à 16 °C part 1 h 30 avant 7 h 00, pas une minute plus tôt', () => {
+  assert.equal(consigneEnVigueur(apprise(2), paris('05:29'), 16), 16);
+  assert.equal(consigneEnVigueur(apprise(2), paris('05:30'), 16), 19);
+});
+
+test('une pièce déjà presque chaude attend : 15 min suffisent pour gagner 0,5 °C', () => {
+  assert.equal(consigneEnVigueur(apprise(2), paris('06:44'), 18.5), 16);
+  assert.equal(consigneEnVigueur(apprise(2), paris('06:45'), 18.5), 19);
+});
+
+test('une pièce lente part trois heures avant, jamais plus', () => {
+  assert.equal(consigneEnVigueur(apprise(0.2), paris('03:59'), 10), 16);
+  assert.equal(consigneEnVigueur(apprise(0.2), paris('04:00'), 10), 19);
+});
+
+test('l’avance apprise se passe de la température extérieure', () =>
+  assert.equal(consigneEnVigueur(apprise(2, { exterieur: null }), paris('05:30'), 16), 19));
+
+test('la coupure quand il fait doux prime sur l’avance apprise', () =>
+  assert.equal(consigneEnVigueur(apprise(2, { coupure_exterieur: true, exterieur: dehors(18, paris('05:30')) }), paris('05:30'), 16), null));
+
+test('sans anticipation, la vitesse apprise ne change rien', () =>
+  assert.equal(consigneEnVigueur(apprise(2, { anticipation: false }), paris('05:30'), 16), 16));
+
+test('repli : sans vitesse apprise, ou sans température, la règle fixe s’applique', () => {
+  // 5 °C dehors : 30 min d'avance. À 6 h 30, la plage de 7 h 00 démarre ; à 6 h 29, pas encore.
+  const froid = dehors(5, paris('06:30'));
+  for (const vitesse of [null, undefined, 0.1, 9]) {
+    assert.equal(consigneEnVigueur(apprise(vitesse, { exterieur: froid }), paris('06:30'), 16), 19);
+    assert.equal(consigneEnVigueur(apprise(vitesse, { exterieur: froid }), paris('06:29'), 16), 16);
+  }
+  assert.equal(consigneEnVigueur(apprise(2, { exterieur: froid }), paris('06:30'), null), 19);
+  // Ni vitesse ni température extérieure : aucune avance.
+  assert.equal(consigneEnVigueur(apprise(null), paris('06:59'), 16), 16);
+});
+
+// ── La fenêtre ouverte ──────────────────────────────────────────────────────
+
+test('fenêtre ouverte : la pièce est coupée jusqu’à l’échéance, même en manuel', () => {
+  const ouverte = { ...piece, fenetre_jusqua: '2026-10-27T09:30:00Z' };
+  assert.equal(fenetreOuverte(ouverte, mardi10h), true);
+  assert.equal(consigneEnVigueur(ouverte, mardi10h), null);
+  assert.equal(consigneEnVigueur({ ...ouverte, mode: 'manuel', consigne_manuelle: 21 }, mardi10h), null);
+});
+
+test('fenêtre échue, absente, ou option coupée : la régulation normale', () => {
+  assert.equal(consigneEnVigueur({ ...piece, fenetre_jusqua: '2026-10-27T08:59:00Z' }, mardi10h), 19);
+  assert.equal(consigneEnVigueur({ ...piece, fenetre_jusqua: null }, mardi10h), 19);
+  assert.equal(consigneEnVigueur({ ...piece, fenetre_jusqua: '2026-10-27T09:30:00Z', coupure_fenetre: false }, mardi10h), 19);
 });
