@@ -1,0 +1,8 @@
+[Unit]
+Description=Mise à jour du boîtier chauffage depuis scutti_domotic
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chauffage-maj

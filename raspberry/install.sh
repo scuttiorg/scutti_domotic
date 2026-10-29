@@ -6,35 +6,55 @@
 # deux .env, démarre les conteneurs et le service, et il n'y a plus rien à
 # faire à la main. Lancé sans ces variables, il s'arrête après l'installation
 # et dit ce qui reste à renseigner.
+#
+# Il se relance sans danger, et c'est aussi lui que la mise à jour
+# automatique (systeme/maj.sh) rejoue à chaque version, avec MISE_A_JOUR=1 :
+# rien de ce que le boîtier a écrit lui-même n'est écrasé (jeton, mot de
+# passe MQTT, réseau Zigbee), et un boîtier déjà relié redémarre sur le
+# nouveau code.
 set -euo pipefail
 
 DEST=/opt/chauffage
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCUTTI_URL="${SCUTTI_URL:-}"
 SCUTTI_CODE="${SCUTTI_CODE:-}"
+MISE_A_JOUR="${MISE_A_JOUR:-}"
 
 # Un secret lisible, tiré au sort : personne n'a plus à inventer un mot de
 # passe MQTT, ni à le retaper deux fois dans deux fichiers.
 tirer_secret() { head -c 24 /dev/urandom | base64 | tr -d '/+=' | cut -c1-24; }
 
-echo "→ Paquets"
-apt-get update -q
-apt-get install -y -q curl ufw unattended-upgrades mosquitto-clients
+# Écrit le fichier seulement s'il change, et le dit : recharger systemd ou
+# NetworkManager à chaque mise à jour pour rien n'apporte que du risque.
+ecrire_si_change() {
+  if [ -f "$1" ] && [ "$(cat "$1")" = "$2" ]; then return 1; fi
+  mkdir -p "$(dirname "$1")"
+  printf '%s\n' "$2" > "$1"
+}
 
-echo "→ Docker (dépôt officiel : le paquet compose n'est pas dans Raspberry Pi OS)"
-if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com | sh
+# Les paquets ne se réinstallent pas à chaque version : les mises à jour
+# système passent par unattended-upgrades, et une mise à jour du boîtier ne
+# doit pas échouer parce qu'un miroir apt est en panne.
+if [ -z "$MISE_A_JOUR" ]; then
+  echo "→ Paquets"
+  apt-get update -q
+  apt-get install -y -q curl git rsync ufw unattended-upgrades mosquitto-clients
+
+  echo "→ Docker (dépôt officiel : le paquet compose n'est pas dans Raspberry Pi OS)"
+  if ! command -v docker >/dev/null 2>&1; then
+    curl -fsSL https://get.docker.com | sh
+  fi
+  docker compose version >/dev/null 2>&1 || apt-get install -y -q docker-compose-plugin
+
+  echo "→ Node 22 (dépôt NodeSource : celui de Raspberry Pi OS est trop ancien)"
+  if ! command -v node >/dev/null 2>&1 || [ "$(node -e 'console.log(process.versions.node.split(".")[0])')" -lt 20 ]; then
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y -q nodejs
+  fi
+
+  echo "→ Mises à jour automatiques"
+  dpkg-reconfigure -f noninteractive unattended-upgrades
 fi
-docker compose version >/dev/null 2>&1 || apt-get install -y -q docker-compose-plugin
-
-echo "→ Node 22 (dépôt NodeSource : celui de Raspberry Pi OS est trop ancien)"
-if ! command -v node >/dev/null 2>&1 || [ "$(node -e 'console.log(process.versions.node.split(".")[0])')" -lt 20 ]; then
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y -q nodejs
-fi
-
-echo "→ Mises à jour automatiques"
-dpkg-reconfigure -f noninteractive unattended-upgrades
 
 echo "→ Pare-feu : SSH, et l'interface locale sur le réseau du bâtiment"
 LOCAL_PORT="${LOCAL_PORT:-8080}"
@@ -59,6 +79,39 @@ else
   echo "   (aucune clé SSH trouvée : mot de passe conservé — ajoute une clé puis relance)"
 fi
 
+echo "→ Tenir debout tout seul"
+# Un boîtier figé (noyau bloqué, carte SD qui ne répond plus) ne se relève
+# pas seul : le chien de garde matériel du Raspberry le redémarre si systemd
+# cesse de lui répondre pendant quinze secondes.
+if [ -e /dev/watchdog ]; then
+  if ecrire_si_change /etc/systemd/system.conf.d/chauffage-watchdog.conf "[Manager]
+RuntimeWatchdogSec=15
+RebootWatchdogSec=2min"; then
+    systemctl daemon-reexec
+  fi
+fi
+# Une panique du noyau redémarre au bout de dix secondes, au lieu de laisser
+# le boîtier figé jusqu'à ce que quelqu'un débranche la prise.
+if ecrire_si_change /etc/sysctl.d/90-chauffage.conf "kernel.panic = 10
+kernel.panic_on_oops = 1"; then
+  sysctl -q -p /etc/sysctl.d/90-chauffage.conf
+fi
+if command -v nmcli >/dev/null 2>&1; then
+  # L'économie d'énergie du wifi du Raspberry coupe la liaison au repos :
+  # c'est la cause la plus courante d'un boîtier allumé mais introuvable.
+  if ecrire_si_change /etc/NetworkManager/conf.d/chauffage.conf "[connection]
+wifi.powersave=2"; then
+    systemctl reload NetworkManager || true
+  fi
+  # NetworkManager abandonne une connexion après quatre échecs, et ne la
+  # retente plus : une box qui redémarre la nuit suffit. 0 = sans fin.
+  nmcli -t -f NAME,TYPE connection show | while IFS=: read -r nom type; do
+    if [ "$type" = 802-11-wireless ]; then
+      nmcli connection modify "$nom" connection.autoconnect-retries 0 || true
+    fi
+  done
+fi
+
 echo "→ Utilisateur de service"
 id chauffage >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin chauffage
 
@@ -73,11 +126,25 @@ if [ -d "$DEST/mosquitto/passwd" ]; then
 fi
 
 echo "→ Fichiers"
-mkdir -p "$DEST"
-cp -r "$HERE"/{docker-compose.yml,mosquitto,zigbee2mqtt,gateway,web} "$DEST"/
+mkdir -p "$DEST"/{gateway,web,mosquitto,zigbee2mqtt}
+cp "$HERE/docker-compose.yml" "$DEST/"
+cp "$HERE/mosquitto/mosquitto.conf" "$DEST/mosquitto/"
+# Le code est remplacé en entier : ce qui a disparu du dépôt disparaît d'ici.
+# Ce que le boîtier a écrit lui-même (.env, cache, dépendances) reste.
+rsync -a --delete --exclude .env --exclude config.cache.json --exclude node_modules \
+  "$HERE/gateway/" "$DEST/gateway/"
+rsync -a --delete "$HERE/web/" "$DEST/web/"
+# La configuration de Zigbee2MQTT n'est posée qu'une fois : il y écrit la clé
+# du réseau à son premier démarrage, puis les noms des appareils. La recopier
+# effacerait le réseau, et tous les appareils seraient à ré-appairer.
+[ -f "$DEST/zigbee2mqtt/configuration.yaml" ] || cp "$HERE/zigbee2mqtt/configuration.yaml" "$DEST/zigbee2mqtt/"
 [ -f "$DEST/.env" ] || cp "$HERE/.env.example" "$DEST/.env"
 [ -f "$DEST/gateway/.env" ] || cp "$HERE/gateway/.env.example" "$DEST/gateway/.env"
 touch "$DEST/gateway/config.cache.json"
+# La version posée, que la mise à jour compare à celle de GitHub. Hors dépôt
+# git (une archive copiée à la main), elle est inconnue, et la prochaine
+# mise à jour réinstalle main.
+git -C "$HERE" rev-parse HEAD 2>/dev/null > "$DEST/VERSION" || echo inconnue > "$DEST/VERSION"
 chown -R root:chauffage "$DEST"
 chmod 750 "$DEST" "$DEST/gateway" "$DEST/web"
 chmod 640 "$DEST/.env" "$DEST/gateway/.env"
@@ -105,10 +172,13 @@ if [ ! -f "$DEST/mosquitto/passwd" ]; then
   chmod 600 "$DEST/mosquitto/passwd"
 fi
 
-echo "→ Service"
-cp "$DEST/gateway/chauffage-gateway.service" /etc/systemd/system/
+echo "→ Services"
+cp "$DEST/gateway/chauffage-gateway.service" "$HERE"/systeme/chauffage-{maj,reseau}.{service,timer} /etc/systemd/system/
+install -m 755 "$HERE/systeme/maj.sh" /usr/local/sbin/chauffage-maj
+install -m 755 "$HERE/systeme/reseau.sh" /usr/local/sbin/chauffage-reseau
 systemctl daemon-reload
 systemctl enable chauffage-gateway
+systemctl enable --now chauffage-maj.timer chauffage-reseau.timer
 
 if [ -n "$SCUTTI_CODE" ] && [ -n "$SCUTTI_URL" ]; then
   echo "→ Liaison avec Scutti"
@@ -125,17 +195,9 @@ if [ -n "$SCUTTI_CODE" ] && [ -n "$SCUTTI_URL" ]; then
   fi
   sed -i "s|^SCUTTI_URL=.*|SCUTTI_URL=$SCUTTI_URL|" "$DEST/gateway/.env"
   sed -i "s|^SCUTTI_TOKEN=.*|SCUTTI_TOKEN=$JETON|" "$DEST/gateway/.env"
+fi
 
-  echo "→ Démarrage"
-  (cd "$DEST" && docker compose up -d)
-  systemctl restart chauffage-gateway
-
-  cat <<EOF
-
-Terminé. Le boîtier est relié à Scutti : la page d'installation continue
-toute seule. L'appairage et le nommage des appareils se font là-bas.
-EOF
-else
+if grep -q '^SCUTTI_TOKEN=jeton-de-la-passerelle$' "$DEST/gateway/.env"; then
   cat <<EOF
 
 Terminé. Reste à faire :
@@ -146,4 +208,22 @@ Terminé. Reste à faire :
 Plus simple : lancez l'installation depuis Scutti, qui donne une ligne à
 coller et relie le boîtier sans rien à éditer.
 EOF
+  exit 0
+fi
+
+echo "→ Démarrage"
+# `up -d` recrée les conteneurs dont la définition a changé, et eux seuls :
+# sans lui, un conteneur d'une version précédente garde ses anciens ports.
+(cd "$DEST" && docker compose up -d)
+systemctl restart chauffage-gateway
+
+if [ -n "$SCUTTI_CODE" ]; then
+  cat <<EOF
+
+Terminé. Le boîtier est relié à Scutti : la page d'installation continue
+toute seule. L'appairage et le nommage des appareils se font là-bas.
+EOF
+else
+  echo
+  echo "Terminé. Le boîtier tourne sur la version ${MISE_A_JOUR:+mise à jour }$(cut -c1-7 "$DEST/VERSION")."
 fi

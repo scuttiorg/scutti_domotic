@@ -1,0 +1,6 @@
+[Unit]
+Description=Garde du réseau du boîtier chauffage (wifi relancé, redémarrage en dernier recours)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chauffage-reseau

@@ -2,6 +2,9 @@
 Description=Passerelle chauffage (Zigbee2MQTT -> scutti)
 After=network-online.target docker.service
 Wants=network-online.target
+# systemd renonce après cinq échecs rapprochés ; un boîtier seul dans un
+# bâtiment n'a personne pour le relancer à la main.
+StartLimitIntervalSec=0
 
 [Service]
 User=chauffage
