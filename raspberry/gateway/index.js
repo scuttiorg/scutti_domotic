@@ -8,6 +8,7 @@ import { valeur } from './fusion.js';
 import { demarrerInterfaceLocale } from './web.js';
 import Acces from './acces.js';
 import Basculements from './basculements.js';
+import { reglagesManquants, ENTRE_DEUX_ESSAIS } from './rapports.js';
 
 /** Ce qui a été réglé ICI, avec la date de chaque champ (local.js). */
 const local = new EtatLocal(config.etatFile);
