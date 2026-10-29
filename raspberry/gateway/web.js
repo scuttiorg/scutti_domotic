@@ -31,6 +31,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DUREE_SESSION_SECONDES } from './acces.js';
+import { DUREES_FORCAGE, TEMPERATURE_MAX_FORCAGE, libelleDuree } from './forcage.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 
@@ -59,6 +60,20 @@ function depuis(iso) {
 const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`;
 
 const degres = (n) => (n === null || n === undefined ? '' : `${Number(n).toFixed(1).replace('.', ',')} &deg;C`);
+
+/**
+ * « Arrêter » : un formulaire, pour que le geste passe par la session et
+ * l'origine. Dans la liste, loin du résumé, le bouton dit ce qu'il arrête :
+ * « Arrêter » seul se confondrait avec le mode Arrêt.
+ */
+const formulaireArreter = (uuid, libelle = 'Arrêter') => `<form method="post" action="/pieces/${encodeURIComponent(uuid)}/arreter">
+                <button type="submit" class="k-button" data-variant="outline" data-size="small">${libelle}</button>
+              </form>`;
+
+/** Ce qu'une rangée de pièce dit d'un forçage en cours. */
+const ligneForcage = (forcage) => (forcage
+  ? `<div class="k-cell-info-subtitle boitier-forcage">${echapper(forcage.resume)}${forcage.suspendu ? ', suspendue sans mesure' : ''}</div>`
+  : '');
 
 function page(titre, corps) {
   return `<!doctype html>
@@ -97,6 +112,7 @@ function pagePieces(contexte) {
               <div class="k-cell-info">
                 <div class="k-cell-info-title">${echapper(p.nom)}</div>
                 <div class="k-cell-info-subtitle">${echapper(p.note)}</div>
+                ${ligneForcage(p.forcage)}
               </div>
             </td>
             <td data-role="meta">${degres(p.consigne)}</td>
@@ -112,6 +128,11 @@ function pagePieces(contexte) {
                 </span>
                 <button type="submit" class="k-button" data-variant="outline" data-size="small" data-sans-js>Valider</button>
               </form>
+              <div class="boitier-rangee boitier-sous-rangee">
+              ${p.forcage
+    ? formulaireArreter(p.uuid, 'Arrêter le forçage')
+    : `<a href="/pieces/${encodeURIComponent(p.uuid)}/forcer" class="k-button" data-variant="outline" data-size="small">Forcer la chauffe</a>`}
+              </div>
             </td>
           </tr>`).join('');
 
@@ -245,6 +266,54 @@ ${rangee('Horloge', 'C’est elle qui départage deux modifications : elle se r�
             </tbody>
           </table>
         </div>
+      </div>
+    </div>`);
+}
+
+/**
+ * Forcer la chauffe d'une pièce : une durée, et les radiateurs à allumer,
+ * tous cochés. Le boîtier vérifie lui-même la demande (forcage.js) : rien
+ * de ce qu'on poste ici ne dépasse quatre heures.
+ */
+function pageForcer(contexte, piece) {
+  const uuid = encodeURIComponent(piece.uuid);
+  const encours = piece.forcage
+    ? `    <div class="k-alert" data-variant="info">
+      <div class="k-alert-content"><p>${echapper(piece.forcage.resume)}. Un nouveau forçage le remplace.</p></div>
+      <div class="k-alert-actions">${formulaireArreter(piece.uuid)}</div>
+    </div>`
+    : '';
+  const radiateurs = piece.radiateurs.map((r, i) => `
+            <label class="boitier-case">
+              <input type="checkbox" name="radiateur" value="${i}" checked>
+              <span class="k-cell-info">
+                <span class="k-cell-info-title">${echapper(r.nom)}</span>
+                <span class="k-cell-info-subtitle">${r.prises.map(echapper).join(', ')}</span>
+              </span>
+            </label>`).join('');
+
+  return page('Forcer la chauffe', `${entete(
+    'Forcer la chauffe',
+    `${echapper(piece.nom)} &middot; ${echapper(contexte.nom)}`,
+    '<a href="/" class="k-button" data-variant="outline">Pièces</a>'
+  )}
+
+${encours}
+    <div class="k-card">
+      <div class="k-card-body" data-rembourrage="oui">
+        <form method="post" action="/pieces/${uuid}/forcer" class="boitier-connexion">
+          <label for="minutes" class="k-field-label">Pendant</label>
+          <span class="k-input">
+            <select id="minutes" name="minutes">
+              ${DUREES_FORCAGE.map((m) => `<option value="${m}"${m === 60 ? ' selected' : ''}>${libelleDuree(m)}</option>`).join('')}
+            </select>
+          </span>
+          <fieldset class="boitier-radiateurs">
+            <legend class="k-field-label">Radiateurs à allumer</legend>${radiateurs}
+          </fieldset>
+          <p class="k-field-hint">Ils restent allumés quelle que soit la consigne, puis la régulation reprend. La chauffe forcée s’arrête d’elle-même au-dessus de ${TEMPERATURE_MAX_FORCAGE} &deg;C dans la pièce, et attend tant que ses capteurs se taisent.</p>
+          <button type="submit" class="k-button" data-variant="filled" data-theme="primary">Forcer la chauffe</button>
+        </form>
       </div>
     </div>`);
 }
@@ -399,6 +468,12 @@ export function demarrerInterfaceLocale(contexte, port, { tls, acces }) {
       }
 
       if (requete.method === 'GET') {
+        const forcer = chemin.match(/^\/pieces\/([0-9a-f-]{36})\/forcer$/);
+        if (forcer) {
+          const piece = contexte.piece(forcer[1]);
+          if (!piece) return reponse.writeHead(404).end('Pièce introuvable');
+          return html(200, pageForcer(contexte, piece));
+        }
         const rendu = RENDUS[chemin];
         if (!rendu) return reponse.writeHead(404).end('Page introuvable');
         return html(200, rendu(contexte));
@@ -415,8 +490,11 @@ export function demarrerInterfaceLocale(contexte, port, { tls, acces }) {
         const corps = await lireCorps(requete);
         const piece = chemin.match(/^\/pieces\/([0-9a-f-]{36})$/);
         const appareil = chemin.match(/^\/appareils\/([A-Za-z0-9x]{3,32})$/);
+        const forcage = chemin.match(/^\/pieces\/([0-9a-f-]{36})\/(forcer|arreter)$/);
 
         if (piece) await contexte.reglerPiece(piece[1], corps.get('champ'), corps.get('valeur'));
+        else if (forcage?.[2] === 'forcer') await contexte.forcer(forcage[1], corps.getAll('radiateur'), corps.get('minutes'));
+        else if (forcage) await contexte.arreterForcage(forcage[1]);
         else if (appareil) await contexte.nommerAppareil(appareil[1], corps.get('libelle'));
         else if (chemin === '/appairer') await contexte.appairer();
         else if (chemin === '/echanger') await contexte.echanger();

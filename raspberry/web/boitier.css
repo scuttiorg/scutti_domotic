@@ -47,3 +47,41 @@
 .boitier-connexion .k-input {
   align-self: stretch;
 }
+
+/* Sous le mode d'une pièce, le bouton qui force sa chauffe ou l'arrête. */
+.boitier-sous-rangee {
+  margin-top: var(--spacing-2);
+}
+
+/* Le forçage en cours, sous le nom de la pièce : il se remarque, et se lit
+ * en entier, sur deux lignes s'il le faut, au lieu d'être coupé. */
+.boitier-forcage {
+  color: var(--color-warning-text, var(--color-warning, inherit));
+  font-weight: 500;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Les radiateurs à allumer : une case par radiateur, ses prises dessous. */
+.boitier-radiateurs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.boitier-case {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  cursor: pointer;
+}
+
+.boitier-case input {
+  margin-top: 0.2rem;
+  accent-color: var(--color-primary, currentColor);
+}

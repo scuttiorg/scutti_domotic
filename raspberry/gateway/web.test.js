@@ -55,7 +55,17 @@ function contexteDeTest() {
     reglerPiece: async (...args) => appels.push(['reglerPiece', ...args]),
     nommerAppareil: async (...args) => appels.push(['nommerAppareil', ...args]),
     appairer: async () => appels.push(['appairer']),
-    echanger: async () => appels.push(['echanger'])
+    echanger: async () => appels.push(['echanger']),
+    piece: (uuid) => (uuid === UUID
+      ? {
+        uuid,
+        nom: 'Atelier <b>chaud</b>',
+        radiateurs: [{ nom: 'Fenêtre', prises: ['atelier/prise-1', 'atelier/prise-2'] }, { nom: 'Porte <i>', prises: ['atelier/prise-3'] }],
+        forcage: null,
+      }
+      : null),
+    forcer: async (...args) => appels.push(['forcer', ...args]),
+    arreterForcage: async (...args) => appels.push(['arreterForcage', ...args]),
   };
 }
 
@@ -259,4 +269,60 @@ test('une panne du boîtier rend une page lisible, pas une trace', async () => {
     assert.equal(reponse.status, 500);
     assert.doesNotMatch(reponse.texte, /réseau coupé/);
   }, { contexte });
+});
+
+// ── La chauffe forcée ───────────────────────────────────────────────────────
+
+test('forcer la chauffe : une page qui coche tous les radiateurs et propose 30 min à 4 h', async () => {
+  await surUnServeur(async ({ get, connecter }) => {
+    const { cookie } = await connecter();
+    const liste = (await get('/', { cookie })).texte;
+    assert.match(liste, new RegExp(`href="/pieces/${UUID}/forcer"[^>]*>Forcer la chauffe<`));
+
+    const reponse = await get(`/pieces/${UUID}/forcer`, { cookie });
+    assert.equal(reponse.status, 200);
+    const html = reponse.texte;
+    assert.equal((html.match(/name="radiateur" value="\d" checked/g) ?? []).length, 2);
+    assert.match(html, /atelier\/prise-1, atelier\/prise-2/);
+    assert.match(html, /Porte &lt;i&gt;/);
+    for (const libelle of ['30 min', '1 h', '2 h', '4 h']) assert.match(html, new RegExp(`>${libelle}</option>`));
+    assert.match(html, /<option value="60" selected>/);
+    assert.doesNotMatch(html, /\u2014/);
+    assert.equal((await get('/pieces/99999999-2222-3333-4444-555555555555/forcer', { cookie })).status, 404);
+  });
+});
+
+test('le forçage posté arrive au boîtier avec les radiateurs cochés et la durée, puis revient à la liste', async () => {
+  await surUnServeur(async ({ poster, connecter, contexte }) => {
+    const { cookie } = await connecter();
+    const corps = new URLSearchParams([['minutes', '120'], ['radiateur', '0'], ['radiateur', '1']]);
+    const reponse = await poster(`/pieces/${UUID}/forcer`, corps, { cookie, referer: `https://127.0.0.1/pieces/${UUID}/forcer` });
+    assert.equal(reponse.status, 303);
+    assert.equal(reponse.headers.location, '/');
+    assert.deepEqual(contexte.appels, [['forcer', UUID, ['0', '1'], '120']]);
+    await poster(`/pieces/${UUID}/arreter`, {}, { cookie });
+    assert.deepEqual(contexte.appels.at(-1), ['arreterForcage', UUID]);
+  });
+});
+
+test('un forçage en cours se lit dans la liste, avec « Arrêter »', async () => {
+  const contexte = contexteDeTest();
+  const pieces = contexte.pieces;
+  contexte.pieces = () => pieces().map((p) => ({ ...p, forcage: { resume: 'Chauffe forcée jusqu’à 15 h 30, 2 radiateurs', suspendu: false } }));
+  await surUnServeur(async ({ get, connecter }) => {
+    const { cookie } = await connecter();
+    const html = (await get('/', { cookie })).texte;
+    assert.match(html, /Chauffe forcée jusqu’à 15 h 30, 2 radiateurs/);
+    assert.match(html, new RegExp(`action="/pieces/${UUID}/arreter"`));
+    assert.doesNotMatch(html, new RegExp(`/pieces/${UUID}/forcer"`));
+  }, { contexte });
+});
+
+test('sans session, ni la page du forçage ni ses formulaires ne passent', async () => {
+  await surUnServeur(async ({ get, poster, contexte }) => {
+    assert.equal((await get(`/pieces/${UUID}/forcer`)).status, 303);
+    assert.equal((await poster(`/pieces/${UUID}/forcer`, { minutes: '60', radiateur: '0' })).status, 403);
+    assert.equal((await poster(`/pieces/${UUID}/arreter`, {})).status, 403);
+    assert.deepEqual(contexte.appels, []);
+  });
 });

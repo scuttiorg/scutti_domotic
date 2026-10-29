@@ -42,7 +42,7 @@ Mosquitto n'écoute que sur `127.0.0.1`, et **l'interface web de Zigbee2MQTT est
 
 ## L'interface locale
 
-Le boîtier sert ses trois pages (pièces, appareils, réglages) sur le réseau du bâtiment, à `https://<nom-du-raspberry>.local:8080`. Elle existe pour le jour où scutti est injoignable : on y règle une consigne, un mode, on appaire un appareil et on le renomme, sans internet.
+Le boîtier sert ses pages (pièces, appareils, réglages, et celle qui force la chauffe d'une pièce) sur le réseau du bâtiment, à `https://<nom-du-raspberry>.local:8080`. Elle existe pour le jour où scutti est injoignable : on y règle une consigne, un mode, on force la chauffe d'une pièce, on appaire un appareil et on le renomme, sans internet.
 
 - Ouverte par `install.sh` sur les réseaux privés seulement (`10/8`, `172.16/12`, `192.168/16`), jamais vers l'extérieur ; `LOCAL_PORT=0` la coupe.
 - **Être sur le wifi ne suffit pas.** Un wifi se pirate : l'interface demande un code d'accès, choisi dans scutti (Domotique, « Code d'accès sur place »). Sans code, elle est fermée, et un boîtier neuf l'est donc par défaut. Le boîtier ne reçoit jamais le code, seulement un vérificateur scrypt, dans la configuration qu'il lit avec son jeton ; il le garde en cache, et l'interface de secours s'ouvre donc aussi quand scutti est injoignable.
@@ -55,6 +55,14 @@ Le boîtier sert ses trois pages (pièces, appareils, réglages) sur le réseau 
 
 Tests de la logique : `cd raspberry/gateway && npm install && npm test` (le lint d'abord : un nom oublié dans un import ne se voit qu'au premier message qui passe par lui).
 
+## La chauffe forcée
+
+Depuis la fiche d'une pièce dans scutti, ou depuis l'interface locale : des radiateurs choisis (tous par défaut) allumés pendant 30 min, 1 h, 2 h ou 4 h, quelle que soit la consigne. Les autres prises de la pièce suivent la régulation ; à l'échéance ou à « Arrêter », les prises forcées reprennent l'état de la pièce (`forcage.js`).
+
+- **Il voyage comme un réglage** : un champ `forcage` de la pièce, `{ prises, jusqua }` ou `null`, daté et arbitré champ par champ à l'échange, comme le mode. Posé ou arrêté d'un côté, l'autre suit ; rangé dans `local.json`, il survit à un redémarrage, avec son échéance absolue.
+- **Garde-fous**, des deux côtés : quatre heures au plus, refusé au-delà ; arrêté de lui-même au-dessus de 28 °C dans la pièce (`TEMPERATURE_MAX_FORCAGE`) ; suspendu tant que les capteurs de la pièce se taisent, comme la régulation.
+- **Compté** : chaque relevé dit quelles prises sont allumées (`prises_allumees`), et `chauffe` y vaut « au moins une prise allumée ». scutti en tire les heures de chauffe et les kWh, chaque radiateur au prorata de ses prises allumées. Un scutti d'avant écarte ces champs sans refuser le relevé.
+
 ## Ce que la passerelle fait
 
 | Quand | Quoi |
@@ -65,11 +73,11 @@ Tests de la logique : `cd raspberry/gateway && npm install && npm test` (le lint
 | à chaque relevé MQTT | calcule la consigne en vigueur et pilote ensemble toutes les prises de la pièce (un ou plusieurs radiateurs, une ou plusieurs prises chacun), avec la marge de régulation (hystérésis) |
 | quand la température d'une pièce perd 1 °C en 5 min ou moins | fenêtre ouverte : la pièce est coupée 30 min, ou jusqu'à ce qu'elle regagne 0,5 °C (fenêtre refermée) ; l'échange part aussitôt pour que Scutti l'affiche. Réglable par pièce dans Scutti (« Couper quand une fenêtre s'ouvre ») |
 | à chaque extinction après 15 min de chauffe au moins | apprend ce que la pièce gagne par heure de chauffe (moyenne glissante, entre 0,2 et 5 °C/h), rangé dans `/var/lib/chauffage/local.json` ; une plage plus chaude démarre alors le temps qu'il faut pour l'atteindre (3 h au plus), au lieu de 3 min par degré sous 15 °C dehors |
-| à chaque allumage ou extinction | `POST /releves` aussitôt, horodaté à la seconde : c'est ce que le graphique de Scutti montre ; hors ligne, gardé et renvoyé au retour (jusqu'à 23 h) |
+| à chaque allumage ou extinction, et au début et à la fin d'un forçage | `POST /releves` aussitôt, horodaté à la seconde, avec les prises allumées : c'est ce que le graphique de Scutti montre ; hors ligne, gardé et renvoyé au retour (jusqu'à 23 h), par lots de moins de 48 Kio |
 | toutes les minutes | réévalue les règles horaires, coupe un capteur muet |
 | quand un capteur d'une pièce parle | s'il n'est pas déjà réglé ainsi, lui demande (il est éveillé à cet instant) d'envoyer sa mesure dès 0,25 °C ou 3 % d'humidité d'écart, et au moins toutes les 5 min ; un échec se retente à un réveil suivant, au plus toutes les 10 min |
 | à chaque passage | `POST /echange` : les pièces et les appareils avec la date de chaque champ, dans les deux sens ; et, dans `etats`, la fenêtre ouverte et la vitesse apprise de chaque pièce, que Scutti montre |
-| toutes les `PUSH_INTERVAL` s | `POST /releves` : température, humidité, état du radiateur, consigne appliquée |
+| toutes les `PUSH_INTERVAL` s | `POST /releves` : température, humidité, état du radiateur, consigne appliquée, prises allumées |
 | quand une prise quitte une pièce | coupée, sauf si une autre pièce la reprend ; une prise ajoutée prend l'état de sa pièce |
 | à l'arrêt | coupe toutes les prises |
 
@@ -83,4 +91,4 @@ Tests de la logique : `cd raspberry/gateway && npm install && npm test` (le lint
 - Interface locale sur les réseaux privés seulement, en HTTPS, derrière un code d'accès dont le boîtier ne connaît que le vérificateur ; l'état local en 0600, dans le seul dossier où le service a le droit d'écrire.
 - SSH : mot de passe refusé dès qu'une clé est posée, par un réglage lu avant tous les autres (`sshd_config.d/00-chauffage.conf`), pour qu'aucun réglage d'usine ne le rouvre.
 - La sauvegarde du réseau Zigbee porte sa clé : elle part en HTTPS avec le jeton (passé à curl par un fichier en 0600, jamais en argument), Scutti la chiffre au repos sous la clé de l'espace propriétaire, ne la rend qu'au boîtier qui présente le jeton, et l'écran n'en montre que la date et la taille. À la reprise, seuls les quatre fichiers attendus, ordinaires, sont tirés de l'archive.
-- Fail-safe : coupure si capteur muet, coupure à l'arrêt du service.
+- Fail-safe : coupure si capteur muet, coupure à l'arrêt du service. Une chauffe forcée ne dure jamais plus de quatre heures et s'arrête au-dessus de 28 °C.
