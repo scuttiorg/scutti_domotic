@@ -9,11 +9,15 @@
 // LA FORME EST CELLE DE L'ÉCHANGE : `{ valeur, le }` par champ. Rien n'est
 // traduit entre le disque, le réseau et l'écran, donc rien ne peut diverger
 // entre les trois.
+//
+// LES VITESSES DE CHAUFFE (vitesse.js) y sont aussi, à part : le boîtier les
+// apprend seul, elles ne s'arbitrent pas, et un redémarrage ne doit pas
+// effacer des semaines de mesures. `vitesses` : uuid de la pièce -> °C/h.
 
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { fusionnerChamps, poser } from './fusion.js';
 
-const VIDE = { pieces: {}, appareils: {} };
+const VIDE = { pieces: {}, appareils: {}, vitesses: {} };
 
 export default class EtatLocal {
   constructor(fichier) {
@@ -25,7 +29,7 @@ export default class EtatLocal {
     if (!existsSync(this.fichier)) return structuredClone(VIDE);
     try {
       const lu = JSON.parse(readFileSync(this.fichier, 'utf8'));
-      return { pieces: lu?.pieces ?? {}, appareils: lu?.appareils ?? {} };
+      return { pieces: lu?.pieces ?? {}, appareils: lu?.appareils ?? {}, vitesses: lu?.vitesses ?? {} };
     } catch {
       // Un fichier abîmé (coupure de courant pendant l'écriture) ne doit pas
       // empêcher le boîtier de démarrer : il repart vide et se remplira au
@@ -73,6 +77,18 @@ export default class EtatLocal {
     this.#ecrire();
   }
 
+  /** La vitesse de chauffe apprise pour la pièce (°C/h), ou null. */
+  vitesse(uuid) {
+    return this.etat.vitesses[uuid] ?? null;
+  }
+
+  /** Range la vitesse apprise ; null l'oublie. */
+  poserVitesse(uuid, vitesse) {
+    if (vitesse === null) delete this.etat.vitesses[uuid];
+    else this.etat.vitesses[uuid] = vitesse;
+    this.#ecrire();
+  }
+
   /** Ce qui part à l'échange : tout, Scutti écartant ce qui est plus vieux que chez lui. */
   pourEchange() {
     return { pieces: this.pieces(), appareils: this.appareils() };
@@ -85,12 +101,13 @@ export default class EtatLocal {
    *
    * Les pièces absentes de la réponse ont été supprimées dans Scutti : elles
    * disparaissent d'ici aussi, sinon le boîtier chaufferait pour une pièce
-   * qui n'existe plus.
+   * qui n'existe plus. Leur vitesse apprise part avec elles.
    */
   appliquerRetour({ pieces = [], appareils = [] } = {}) {
-    const neuf = { pieces: {}, appareils: {} };
+    const neuf = { pieces: {}, appareils: {}, vitesses: {} };
     for (const piece of pieces) {
       neuf.pieces[piece.uuid] = fusionnerChamps(this.champsPiece(piece.uuid), piece.champs);
+      if (this.etat.vitesses[piece.uuid] !== undefined) neuf.vitesses[piece.uuid] = this.etat.vitesses[piece.uuid];
     }
     for (const appareil of appareils) {
       neuf.appareils[appareil.ieee] = fusionnerChamps(this.champsAppareil(appareil.ieee), appareil.champs);

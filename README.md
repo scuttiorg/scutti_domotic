@@ -62,10 +62,12 @@ Tests de la logique : `cd raspberry/gateway && npm install && npm test` (le lint
 | tant qu'une commande attend | le même passage, toutes les `PULL_INTERVAL_RAPIDE` s : `GET /commandes`, exécution sur le bridge (`permit_join`, `device/rename`), puis acquittement |
 | à chaque changement du réseau Zigbee | `PUT /appareils` : la liste entière, avec le type déduit des `exposes`, le modèle, la batterie et la dernière vue ; au plus toutes les `APPAREILS_INTERVAL` s |
 | à chaque relevé MQTT | calcule la consigne en vigueur et pilote ensemble toutes les prises de la pièce (un ou plusieurs radiateurs, une ou plusieurs prises chacun), avec la marge de régulation (hystérésis) |
+| quand la température d'une pièce perd 1 °C en 5 min ou moins | fenêtre ouverte : la pièce est coupée 30 min, ou jusqu'à ce qu'elle regagne 0,5 °C (fenêtre refermée) ; l'échange part aussitôt pour que Scutti l'affiche. Réglable par pièce dans Scutti (« Couper quand une fenêtre s'ouvre ») |
+| à chaque extinction après 15 min de chauffe au moins | apprend ce que la pièce gagne par heure de chauffe (moyenne glissante, entre 0,2 et 5 °C/h), rangé dans `/var/lib/chauffage/local.json` ; une plage plus chaude démarre alors le temps qu'il faut pour l'atteindre (3 h au plus), au lieu de 3 min par degré sous 15 °C dehors |
 | à chaque allumage ou extinction | `POST /releves` aussitôt, horodaté à la seconde : c'est ce que le graphique de Scutti montre ; hors ligne, gardé et renvoyé au retour (jusqu'à 23 h) |
 | toutes les minutes | réévalue les règles horaires, coupe un capteur muet |
 | quand un capteur d'une pièce parle | s'il n'est pas déjà réglé ainsi, lui demande (il est éveillé à cet instant) d'envoyer sa mesure dès 0,25 °C ou 3 % d'humidité d'écart, et au moins toutes les 5 min ; un échec se retente à un réveil suivant, au plus toutes les 10 min |
-| à chaque passage | `POST /echange` : les pièces et les appareils avec la date de chaque champ, dans les deux sens |
+| à chaque passage | `POST /echange` : les pièces et les appareils avec la date de chaque champ, dans les deux sens ; et, dans `etats`, la fenêtre ouverte et la vitesse apprise de chaque pièce, que Scutti montre |
 | toutes les `PUSH_INTERVAL` s | `POST /releves` : température, humidité, état du radiateur, consigne appliquée |
 | quand une prise quitte une pièce | coupée, sauf si une autre pièce la reprend ; une prise ajoutée prend l'état de sa pièce |
 | à l'arrêt | coupe toutes les prises |

@@ -1,6 +1,6 @@
 import config from './config.js';
 import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge } from './mqtt.js';
-import { consigneEnVigueur, doitChauffer, capteursDe, prisesDe, prisesAPoser, mesurePiece } from './thermostat.js';
+import { consigneEnVigueur, doitChauffer, capteursDe, prisesDe, prisesAPoser, mesurePiece, FUSEAU } from './thermostat.js';
 import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger } from './scutti.js';
 import { construireAppareils, signature } from './devices.js';
 import EtatLocal from './local.js';
@@ -9,6 +9,8 @@ import { demarrerInterfaceLocale } from './web.js';
 import Acces from './acces.js';
 import Basculements from './basculements.js';
 import { reglagesManquants, ENTRE_DEUX_ESSAIS } from './rapports.js';
+import { suivreFenetre, SUIVI_VIDE } from './fenetre.js';
+import { vitesseMesuree, apprendre } from './vitesse.js';
 
 /** Ce qui a été réglé ICI, avec la date de chaque champ (local.js). */
 const local = new EtatLocal(config.etatFile);
@@ -23,8 +25,17 @@ let nomBoitier = 'Boîtier';
  */
 let verificateurLocal = null;
 
-/** pieceUuid -> { piece, temperature, humidite, chauffe, releveLe } */
+/**
+ * pieceUuid -> { piece, temperature, humidite, chauffe, releveLe, suivi, chauffeDepuis }
+ *
+ * `suivi` : l'historique court des mesures et la coupure en cours quand une
+ * fenêtre est ouverte (fenetre.js). `chauffeDepuis` : l'allumage en cours,
+ * `{ le, temperature }`, d'où la vitesse de chauffe s'apprend (vitesse.js).
+ */
 const state = new Map();
+const pieceNeuve = (piece) => ({
+  piece, temperature: null, humidite: null, chauffe: false, releveLe: null, suivi: SUIVI_VIDE, chauffeDepuis: null,
+});
 
 /**
  * Le dernier relevé de chaque capteur : nom -> { temperature, humidite, le }.
@@ -47,12 +58,62 @@ function onReleve(nom, releve) {
   }
 }
 
-/** La température de la pièce, depuis ses capteurs vivants (thermostat.js). */
+/** La température de la pièce, depuis ses capteurs vivants (thermostat.js) ; rend la mesure, ou null. */
 function mesurer(s) {
   const m = mesurePiece(s.piece, mesures, Date.now(), config.sensorTimeout);
   s.temperature = m?.temperature ?? null;
   s.humidite = m?.humidite ?? null;
   if (m) s.releveLe = m.le;
+  return m;
+}
+
+/** La fin de la coupure pour fenêtre ouverte, en ISO, ou null. */
+const fenetreJusqua = (s) => (s.suivi.fenetre ? new Date(s.suivi.fenetre.jusqua).toISOString() : null);
+
+/**
+ * La consigne de la pièce : sa configuration, plus ce que le boîtier sait
+ * seul, la fenêtre ouverte et la vitesse de chauffe apprise.
+ */
+function consigneDe(s) {
+  return consigneEnVigueur(
+    { ...s.piece, fenetre_jusqua: fenetreJusqua(s), vitesse_chauffe: local.vitesse(s.piece.uuid) },
+    new Date(),
+    s.temperature
+  );
+}
+
+/**
+ * Suit la fenêtre de la pièce (fenetre.js). Une coupure qui commence ou
+ * finit part tout de suite à Scutti, par un échange, plutôt qu'au passage
+ * suivant : c'est ce que la fiche de la pièce doit dire.
+ */
+function suivreLaFenetre(s, mesure) {
+  const avant = s.suivi.fenetre;
+  s.suivi = suivreFenetre(s.suivi, mesure, Date.now(), s.piece.coupure_fenetre !== false);
+  if (Boolean(avant) === Boolean(s.suivi.fenetre)) return;
+  console.log(s.suivi.fenetre
+    ? `[${s.piece.nom}] chute brutale : fenêtre ouverte, chauffage coupé jusqu’à ${new Date(s.suivi.fenetre.jusqua).toLocaleTimeString('fr-FR', { timeZone: FUSEAU })}`
+    : `[${s.piece.nom}] fenêtre refermée ou coupure échue : régulation normale`);
+  echangerAvecScutti().catch((e) => console.warn('[scutti] échange après la fenêtre impossible :', e.message));
+}
+
+/**
+ * Un allumage ouvre une période de chauffe ; l'extinction la mesure et, si
+ * elle apprend quelque chose, met à jour la vitesse de la pièce (vitesse.js).
+ */
+function noterChauffe(s, allume) {
+  const maintenant = Date.now();
+  if (allume) {
+    s.chauffeDepuis = { le: maintenant, temperature: s.temperature };
+    return;
+  }
+  const interrompue = Boolean(s.suivi.fenetre) || !capteurVivant(s);
+  const mesure = vitesseMesuree(s.chauffeDepuis, { le: maintenant, temperature: s.temperature }, interrompue);
+  s.chauffeDepuis = null;
+  if (mesure === null) return;
+  const vitesse = apprendre(local.vitesse(s.piece.uuid), mesure);
+  local.poserVitesse(s.piece.uuid, vitesse);
+  console.log(`[${s.piece.nom}] chauffe mesurée : ${mesure.toFixed(2)} °C/h, vitesse apprise ${vitesse} °C/h`);
 }
 
 /** Les allumages et extinctions, envoyés à la seconde (basculements.js). */
@@ -78,11 +139,12 @@ function commander(piece, allume) {
 
 function reguler(s) {
   const vivant = capteurVivant(s);
-  mesurer(s);
-  const consigne = capteurVivant(s) ? consigneEnVigueur(s.piece) : null;
+  suivreLaFenetre(s, mesurer(s));
+  const consigne = capteurVivant(s) ? consigneDe(s) : null;
   const chauffer = doitChauffer(consigne, s.temperature, s.chauffe, s.piece.hysteresis);
   if (vivant && !capteurVivant(s)) console.warn(`[${s.piece.nom}] capteurs muets → coupure de sécurité`);
   if (chauffer !== s.chauffe) {
+    noterChauffe(s, chauffer);
     s.chauffe = chauffer;
     commander(s.piece, chauffer);
     basculements.noter({
@@ -107,9 +169,23 @@ function reguler(s) {
  * boîtier recevrait l'ancienne valeur et la rejouerait.
  */
 async function echangerAvecScutti() {
-  const retour = await echanger(local.pourEchange());
+  const retour = await echanger({ ...local.pourEchange(), etats: etatsPourScutti() });
   dernierEchange = { le: new Date().toISOString(), ok: Boolean(retour) };
   if (retour) local.appliquerRetour(retour);
+}
+
+/**
+ * Ce que le boîtier sait seul, et que Scutti montre : la coupure en cours
+ * quand une fenêtre est ouverte, et la vitesse de chauffe apprise, d'où
+ * Scutti tire la même avance que le boîtier. Un Scutti d'avant ignore le
+ * champ (son schéma écarte ce qu'il ne connaît pas, sans refuser le corps).
+ */
+function etatsPourScutti() {
+  return [...state.values()].map((s) => ({
+    uuid: s.piece.uuid,
+    fenetre_jusqua: fenetreJusqua(s),
+    vitesse_chauffe: local.vitesse(s.piece.uuid),
+  }));
 }
 
 /**
@@ -148,7 +224,7 @@ function appliquer(brutes) {
       existant.piece = piece;
       reguler(existant);
     } else {
-      state.set(piece.uuid, { piece, temperature: null, humidite: null, chauffe: false, releveLe: null });
+      state.set(piece.uuid, pieceNeuve(piece));
     }
   }
   ecouter(pieces);
@@ -351,7 +427,7 @@ function push() {
       temperature: s.temperature,
       humidite: s.humidite,
       chauffe: s.chauffe,
-      consigne: capteurVivant(s) ? consigneEnVigueur(s.piece) : null,
+      consigne: capteurVivant(s) ? consigneDe(s) : null,
       mesure_le: s.releveLe,
     }));
   if (releves.length) pushReleves(releves);
@@ -387,6 +463,15 @@ function borner(champ, saisie) {
 // gestes. Tout ce qu'elle écrit passe par l'état local, donc par une date,
 // donc par l'arbitrage.
 
+/** Ce que la liste du boîtier dit sous le nom de la pièce. */
+function noteDe(s) {
+  if (s.suivi.fenetre) {
+    const fin = new Date(s.suivi.fenetre.jusqua).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: FUSEAU });
+    return `Fenêtre ouverte, chauffage coupé jusqu’à ${fin}`;
+  }
+  return s.releveLe ? `Mesuré ${new Date(s.releveLe).toLocaleTimeString('fr-FR')}` : 'Aucune mesure';
+}
+
 const contexte = {
   get nom() { return nomBoitier; },
   scuttiUrl: config.scutti.url,
@@ -397,10 +482,10 @@ const contexte = {
     uuid: s.piece.uuid,
     nom: s.piece.nom,
     mode: s.piece.mode,
-    consigne: capteurVivant(s) ? consigneEnVigueur(s.piece) : null,
+    consigne: capteurVivant(s) ? consigneDe(s) : null,
     temperature: s.temperature,
     chauffe: s.chauffe,
-    note: s.releveLe ? `Mesuré ${new Date(s.releveLe).toLocaleTimeString('fr-FR')}` : 'Aucune mesure',
+    note: noteDe(s),
   })),
 
   appareils: () => construireAppareils(inventaire, vus).map((a) => ({
