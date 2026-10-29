@@ -1,0 +1,17 @@
+[Unit]
+Description=Sauvegarde du réseau Zigbee du boîtier chauffage dans Scutti
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chauffage-sauvegarde
+# Le script lit le dossier de Zigbee2MQTT et le .env de la passerelle, et
+# n'écrit que l'empreinte du dernier envoi : le reste du système lui est
+# fermé en écriture.
+StateDirectory=chauffage-sauvegarde
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
