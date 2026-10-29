@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consigneEnVigueur, doitChauffer, mesurePiece, avance, prisesDe, prisesAPoser } from './thermostat.js';
+import { consigneEnVigueur, doitChauffer, mesurePiece, avance, prisesDe, prisesAPoser, seuilExterieur } from './thermostat.js';
 
 const piece = {
   mode: 'auto', consigne_defaut: 16, consigne_manuelle: null, manuel_jusqua: null,
@@ -74,6 +74,19 @@ test('sans anticipation, elle attend son heure', () =>
   assert.equal(consigneEnVigueur({ ...reglee(dehors(5, mardi6h50)), anticipation: false }, mardi6h50), 16));
 test('au-dessus de 17 °C dehors, pas de chauffe', () =>
   assert.equal(consigneEnVigueur(reglee(dehors(18, mardi10h)), mardi10h), null));
+test('le seuil choisi pour la pièce remplace les 17 °C', () => {
+  // Coupée dès 12 °C dehors : à 13 °C, plus de chauffe ; à 11 °C, la règle s'applique.
+  assert.equal(consigneEnVigueur({ ...reglee(dehors(13, mardi10h)), seuil_exterieur: 12 }, mardi10h), null);
+  assert.equal(consigneEnVigueur({ ...reglee(dehors(11, mardi10h)), seuil_exterieur: 12 }, mardi10h), 19);
+  // Plus haut que 17 : à 18 °C dehors, on chauffe encore si le seuil est à 20.
+  assert.equal(consigneEnVigueur({ ...reglee(dehors(18, mardi10h)), seuil_exterieur: 20 }, mardi10h), 19);
+});
+test('un seuil absent ou illisible vaut 17 °C', () => {
+  assert.equal(seuilExterieur({}), 17);
+  assert.equal(seuilExterieur({ seuil_exterieur: null }), 17);
+  assert.equal(seuilExterieur({ seuil_exterieur: '12' }), 17);
+  assert.equal(seuilExterieur({ seuil_exterieur: 9.5 }), 9.5);
+});
 test('le manuel prime quand il fait doux', () =>
   assert.equal(consigneEnVigueur({ ...reglee(dehors(18, mardi10h)), mode: 'manuel', consigne_manuelle: 21 }, mardi10h), 21));
 test('une température extérieure de plus de trois heures ne compte plus', () =>

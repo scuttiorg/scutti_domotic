@@ -35,8 +35,18 @@ export function regleCouvre(regle, date) {
   return (regle.jours.includes(jour) && maintenant >= debut) || (regle.jours.includes(veille) && maintenant < fin);
 }
 
-/** Au-dessus, dehors, une pièce qui a la coupure ne chauffe pas. */
+/**
+ * Au-dessus, dehors, une pièce qui a la coupure ne chauffe pas. Chaque pièce
+ * choisit son seuil dans Scutti (`seuil_exterieur`) ; celui-ci vaut pour une
+ * configuration qui ne le porte pas encore.
+ */
 export const SEUIL_DOUX = 17;
+
+/** Le seuil de coupure de la pièce, ou celui par défaut s'il manque ou ne se lit pas. */
+export function seuilExterieur(piece) {
+  const seuil = piece.seuil_exterieur;
+  return typeof seuil === 'number' && Number.isFinite(seuil) ? seuil : SEUIL_DOUX;
+}
 /** L'avance la plus longue, par grand froid. */
 export const AVANCE_MAX = 45;
 /** Une température extérieure plus vieille ne compte plus (Scutti injoignable). */
@@ -69,7 +79,7 @@ export function consigneEnVigueur(piece, date = new Date()) {
   }
 
   const exterieur = exterieurDe(piece.exterieur, date);
-  if (piece.coupure_exterieur && exterieur !== null && exterieur > SEUIL_DOUX) return null;
+  if (piece.coupure_exterieur && exterieur !== null && exterieur > seuilExterieur(piece)) return null;
 
   const regle = regleA(piece, date);
   const ici = regle ? regle.consigne : piece.consigne_defaut;
