@@ -41,13 +41,14 @@ test('le coordinateur ne fait pas partie des appareils', () => {
   assert.equal(liste[0].modele, 'SNZB-02');
 });
 
-test('la batterie et la dernière vue viennent de ce que l’appareil a dit', () => {
-  const vus = new Map([['atelier/thermo', { batterie: 72, vuLe: '2026-10-28T09:00:00.000Z' }]]);
+test('la batterie, la température et la dernière vue viennent de ce que l’appareil a dit', () => {
+  const vus = new Map([['atelier/thermo', { batterie: 72, temperature: 18.4, vuLe: '2026-10-28T09:00:00.000Z' }]]);
   const [appareil] = construireAppareils(
     [{ type: 'EndDevice', ieee_address: '0x0002', friendly_name: 'atelier/thermo', definition: { exposes: [] } }],
     vus,
   );
   assert.equal(appareil.batterie, 72);
+  assert.equal(appareil.temperature, 18.4);
   assert.equal(appareil.vu_le, '2026-10-28T09:00:00.000Z');
 });
 
@@ -56,13 +57,14 @@ test('un appareil dont on n’a rien entendu n’invente ni batterie ni date', (
     { type: 'EndDevice', ieee_address: '0x0003', friendly_name: 'atelier/radiateur', definition: { exposes: [{ property: 'state', access: 7 }] } },
   ]);
   assert.equal(appareil.batterie, null);
+  assert.equal(appareil.temperature, null);
   assert.equal(appareil.vu_le, null);
   assert.equal(appareil.type, 'prise');
 });
 
-test('la batterie et la date de dernière vue ne changent pas la signature', () => {
-  const avant = [{ ieee: '0x0002', nom_z2m: 'atelier/thermo', type: 'capteur', modele: 'SNZB-02', batterie: 72, vu_le: '2026-10-28T10:00:00Z' }];
-  const apres = [{ ...avant[0], batterie: 71, vu_le: '2026-10-28T10:05:00Z' }];
+test('la batterie, la température et la date de dernière vue ne changent pas la signature', () => {
+  const avant = [{ ieee: '0x0002', nom_z2m: 'atelier/thermo', type: 'capteur', modele: 'SNZB-02', batterie: 72, temperature: 18.4, vu_le: '2026-10-28T10:00:00Z' }];
+  const apres = [{ ...avant[0], batterie: 71, temperature: 18.9, vu_le: '2026-10-28T10:05:00Z' }];
   assert.equal(signature(avant), signature(apres));
 });
 
