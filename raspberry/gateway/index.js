@@ -283,7 +283,7 @@ function reglerSiBesoin(nom) {
     .then(async () => {
       for (const reglage of manquants) await demanderReglage(reglage);
       capteursRegles.add(nom);
-      console.log(`[capteurs] ${nom} : mesure envoyée dès 0,1 °C d’écart, et au moins toutes les 5 min`);
+      console.log(`[capteurs] ${nom} : mesure envoyée dès 0,25 °C (3 % d’humidité) d’écart, et au moins toutes les 5 min`);
     })
     .catch((e) => console.warn(`[capteurs] ${nom} pas encore réglé (${e.message}) : nouvel essai à un prochain réveil`));
 }

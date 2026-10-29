@@ -3,8 +3,9 @@
 // Un thermomètre sur pile n'envoie sa mesure que lorsqu'elle a assez changé
 // (souvent un demi-degré) ou à long intervalle : son écran affichait 16,6 °C
 // quand Scutti, et donc la régulation, en était encore à 17,1. On lui
-// demande d'envoyer dès 0,1 °C d'écart (1 % d'humidité), et au moins toutes
-// les cinq minutes, au prix d'un peu plus de pile.
+// demande d'envoyer dès 0,25 °C d'écart (3 % d'humidité), et au moins toutes
+// les cinq minutes : assez fin pour une marge de régulation d'un demi-degré,
+// sans user la pile pour des dixièmes qui ne changent rien au chauffage.
 //
 // Seulement aux capteurs dont une pièce se sert, et seulement s'il le faut :
 // Zigbee2MQTT dit, dans sa liste des appareils, comment chacun est réglé.
@@ -16,8 +17,8 @@
 
 /** Ce qu'on veut, par mesure. `reportable_change` est en centièmes de l'unité. */
 export const VOULU = [
-  { cluster: 'msTemperatureMeasurement', attribute: 'measuredValue', reportable_change: 10 },  // 0,1 °C
-  { cluster: 'msRelativeHumidity', attribute: 'measuredValue', reportable_change: 100 },       // 1 %
+  { cluster: 'msTemperatureMeasurement', attribute: 'measuredValue', reportable_change: 25 },  // 0,25 °C
+  { cluster: 'msRelativeHumidity', attribute: 'measuredValue', reportable_change: 300 },       // 3 %
 ].map((m) => ({ ...m, minimum_report_interval: 10, maximum_report_interval: 300 }));
 
 export const ENTRE_DEUX_ESSAIS = 10 * 60_000;

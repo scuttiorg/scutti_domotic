@@ -20,22 +20,22 @@ const reglage = (cluster, reportable_change, maximum_report_interval) => ({
 test('un thermomètre d’usine : température et humidité à régler', () => {
   const manquants = reglagesManquants(thermometre());
   assert.deepEqual(manquants.map((m) => [m.id, m.endpoint, m.cluster, m.reportable_change, m.maximum_report_interval]), [
-    ['Thermomètre atelier', 1, 'msTemperatureMeasurement', 10, 300],
-    ['Thermomètre atelier', 1, 'msRelativeHumidity', 100, 300],
+    ['Thermomètre atelier', 1, 'msTemperatureMeasurement', 25, 300],
+    ['Thermomètre atelier', 1, 'msRelativeHumidity', 300, 300],
   ]);
 });
 
 test('déjà réglé comme il faut, ou mieux : rien à demander', () => {
   assert.deepEqual(reglagesManquants(thermometre([
-    reglage('msTemperatureMeasurement', 10, 300),
-    reglage('msRelativeHumidity', 50, 120),
+    reglage('msTemperatureMeasurement', 25, 300),
+    reglage('msRelativeHumidity', 100, 120),
   ])), []);
 });
 
 test('un seuil d’un demi-degré ou un intervalle d’une heure ne conviennent pas', () => {
   const manquants = reglagesManquants(thermometre([
     reglage('msTemperatureMeasurement', 50, 300),
-    reglage('msRelativeHumidity', 100, 3600),
+    reglage('msRelativeHumidity', 300, 3600),
   ]));
   assert.equal(manquants.length, 2);
 });

@@ -64,7 +64,7 @@ Tests de la logique : `cd raspberry/gateway && npm install && npm test` (le lint
 | à chaque relevé MQTT | calcule la consigne en vigueur et pilote ensemble toutes les prises de la pièce (un ou plusieurs radiateurs, une ou plusieurs prises chacun), avec la marge de régulation (hystérésis) |
 | à chaque allumage ou extinction | `POST /releves` aussitôt, horodaté à la seconde : c'est ce que le graphique de Scutti montre ; hors ligne, gardé et renvoyé au retour (jusqu'à 23 h) |
 | toutes les minutes | réévalue les règles horaires, coupe un capteur muet |
-| quand un capteur d'une pièce parle | s'il n'est pas déjà réglé ainsi, lui demande (il est éveillé à cet instant) d'envoyer sa mesure dès 0,1 °C ou 1 % d'écart, et au moins toutes les 5 min ; un échec se retente à un réveil suivant, au plus toutes les 10 min |
+| quand un capteur d'une pièce parle | s'il n'est pas déjà réglé ainsi, lui demande (il est éveillé à cet instant) d'envoyer sa mesure dès 0,25 °C ou 3 % d'humidité d'écart, et au moins toutes les 5 min ; un échec se retente à un réveil suivant, au plus toutes les 10 min |
 | à chaque passage | `POST /echange` : les pièces et les appareils avec la date de chaque champ, dans les deux sens |
 | toutes les `PUSH_INTERVAL` s | `POST /releves` : température, humidité, état du radiateur, consigne appliquée |
 | quand une prise quitte une pièce | coupée, sauf si une autre pièce la reprend ; une prise ajoutée prend l'état de sa pièce |
