@@ -1,0 +1,13 @@
+[Unit]
+Description=Sauvegarde du réseau Zigbee du boîtier chauffage, chaque nuit
+
+[Timer]
+# Peu après le démarrage : un boîtier qu'on vient d'installer a sa première
+# sauvegarde le jour même, sans attendre la nuit.
+OnBootSec=15min
+OnCalendar=*-*-* 03:00:00
+# Plusieurs boîtiers n'envoient pas leur archive à la même seconde.
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

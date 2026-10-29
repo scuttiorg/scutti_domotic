@@ -12,6 +12,11 @@
 # rien de ce que le boîtier a écrit lui-même n'est écrasé (jeton, mot de
 # passe MQTT, réseau Zigbee), et un boîtier déjà relié redémarre sur le
 # nouveau code.
+#
+# Sur une carte SD NEUVE (aucune configuration de Zigbee2MQTT) installée avec
+# un code, il redemande à Scutti la dernière sauvegarde du réseau Zigbee
+# (systeme/sauvegarde.sh) et la pose avant le premier démarrage : le boîtier
+# repart sur le même réseau, et les appareils déjà appairés reviennent seuls.
 set -euo pipefail
 
 DEST=/opt/chauffage
@@ -30,6 +35,39 @@ ecrire_si_change() {
   if [ -f "$1" ] && [ "$(cat "$1")" = "$2" ]; then return 1; fi
   mkdir -p "$(dirname "$1")"
   printf '%s\n' "$2" > "$1"
+}
+
+# La dernière sauvegarde du réseau Zigbee, gardée par Scutti, posée dans le
+# dossier de Zigbee2MQTT. Ne lève jamais : sans sauvegarde (404, y compris
+# d'un Scutti qui ne connaît pas encore la route), ou si elle est illisible,
+# l'installation continue comme avant, sur un réseau neuf, et le dit.
+# Le jeton passe par un fichier en 0600, jamais en argument (`ps` le montrerait).
+restaurer_zigbee() {
+  local travail code f repris=()
+  travail=$(mktemp -d)
+  (umask 077 && printf 'Authorization: Bearer %s\n' "$JETON" > "$travail/entete")
+  code=$(curl -sS --proto =https --max-time 120 -H @"$travail/entete" \
+    -o "$travail/zigbee.tar.gz" -w '%{http_code}' \
+    "$SCUTTI_URL/api/public/domotique/passerelle/sauvegarde" || true)
+  if [ "$code" = 404 ]; then
+    echo "   Aucune sauvegarde dans Scutti : Zigbee2MQTT crée un réseau neuf, les appareils seront à appairer."
+  elif [ "$code" != 200 ]; then
+    echo "   Sauvegarde injoignable (réponse ${code:-aucune}) : Zigbee2MQTT crée un réseau neuf." >&2
+  # Extraite à part, et seuls les fichiers attendus, ordinaires, sont repris :
+  # une archive ne pose rien d'autre dans le dossier, ni lien, ni chemin.
+  elif ! mkdir "$travail/x" || ! tar -xzf "$travail/zigbee.tar.gz" -C "$travail/x" --no-same-owner --no-same-permissions 2>/dev/null \
+      || [ ! -f "$travail/x/configuration.yaml" ] || [ -L "$travail/x/configuration.yaml" ]; then
+    echo "   Sauvegarde illisible ou sans configuration : Zigbee2MQTT crée un réseau neuf." >&2
+  else
+    for f in configuration.yaml coordinator_backup.json database.db state.json; do
+      if [ -f "$travail/x/$f" ] && [ ! -L "$travail/x/$f" ]; then
+        install -m 640 -o root -g chauffage "$travail/x/$f" "$DEST/zigbee2mqtt/$f"
+        repris+=("$f")
+      fi
+    done
+    echo "   Réseau Zigbee repris de Scutti (${repris[*]}) : les appareils déjà appairés reviennent seuls."
+  fi
+  rm -rf "$travail"
 }
 
 # Les paquets ne se réinstallent pas à chaque version : les mises à jour
@@ -160,7 +198,12 @@ rsync -a --delete "$HERE/web/" "$DEST/web/"
 # La configuration de Zigbee2MQTT n'est posée qu'une fois : il y écrit la clé
 # du réseau à son premier démarrage, puis les noms des appareils. La recopier
 # effacerait le réseau, et tous les appareils seraient à ré-appairer.
-[ -f "$DEST/zigbee2mqtt/configuration.yaml" ] || cp "$HERE/zigbee2mqtt/configuration.yaml" "$DEST/zigbee2mqtt/"
+# Son absence dit aussi que la carte est neuve : la sauvegarde gardée par
+# Scutti sera reprise une fois le jeton obtenu (« Liaison avec Scutti »).
+if [ ! -f "$DEST/zigbee2mqtt/configuration.yaml" ]; then
+  ZIGBEE_NEUF=1
+  cp "$HERE/zigbee2mqtt/configuration.yaml" "$DEST/zigbee2mqtt/"
+fi
 [ -f "$DEST/.env" ] || cp "$HERE/.env.example" "$DEST/.env"
 [ -f "$DEST/gateway/.env" ] || cp "$HERE/gateway/.env.example" "$DEST/gateway/.env"
 touch "$DEST/gateway/config.cache.json"
@@ -215,12 +258,13 @@ chown 1883:1883 "$DEST/mosquitto/passwd"
 chmod 600 "$DEST/mosquitto/passwd"
 
 echo "→ Services"
-cp "$DEST/gateway/chauffage-gateway.service" "$HERE"/systeme/chauffage-{maj,reseau}.{service,timer} /etc/systemd/system/
+cp "$DEST/gateway/chauffage-gateway.service" "$HERE"/systeme/chauffage-{maj,reseau,sauvegarde}.{service,timer} /etc/systemd/system/
 install -m 755 "$HERE/systeme/maj.sh" /usr/local/sbin/chauffage-maj
 install -m 755 "$HERE/systeme/reseau.sh" /usr/local/sbin/chauffage-reseau
+install -m 755 "$HERE/systeme/sauvegarde.sh" /usr/local/sbin/chauffage-sauvegarde
 systemctl daemon-reload
 systemctl enable chauffage-gateway
-systemctl enable --now chauffage-maj.timer chauffage-reseau.timer
+systemctl enable --now chauffage-maj.timer chauffage-reseau.timer chauffage-sauvegarde.timer
 
 if [ -n "$SCUTTI_CODE" ] && [ -n "$SCUTTI_URL" ]; then
   echo "→ Liaison avec Scutti"
@@ -237,6 +281,13 @@ if [ -n "$SCUTTI_CODE" ] && [ -n "$SCUTTI_URL" ]; then
   fi
   sed -i "s|^SCUTTI_URL=.*|SCUTTI_URL=$SCUTTI_URL|" "$DEST/gateway/.env"
   sed -i "s|^SCUTTI_TOKEN=.*|SCUTTI_TOKEN=$JETON|" "$DEST/gateway/.env"
+
+  # AVANT le premier `docker compose up` : Zigbee2MQTT tirerait sinon une
+  # clé neuve, et le réseau sauvegardé ne servirait plus à rien.
+  if [ -n "${ZIGBEE_NEUF:-}" ]; then
+    echo "→ Réseau Zigbee : reprise de la sauvegarde gardée par Scutti"
+    restaurer_zigbee
+  fi
 fi
 
 if grep -q '^SCUTTI_TOKEN=jeton-de-la-passerelle$' "$DEST/gateway/.env"; then
