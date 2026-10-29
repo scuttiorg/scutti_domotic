@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consigneEnVigueur, doitChauffer, mesurePiece } from './thermostat.js';
+import { consigneEnVigueur, doitChauffer, mesurePiece, avance } from './thermostat.js';
 
 const piece = {
   mode: 'auto', consigne_defaut: 16, consigne_manuelle: null, manuel_jusqua: null,
@@ -57,3 +57,24 @@ test('tous les capteurs qui comptent sont muets → aucune mesure', () =>
   assert.equal(mesurePiece({ capteurs: [{ nom: 'muet', compte: true }] }, mesures, t0, vingtMin), null));
 test('configuration d’avant les listes : `capteur` seul', () =>
   assert.equal(mesurePiece({ capteur: 'fenetre' }, mesures, t0, vingtMin).temperature, 17));
+
+// Mardi 6h50 à Paris : la règle de semaine commence à 7h00.
+const mardi6h50 = new Date('2026-10-27T05:50:00Z');
+const dehors = (temperature, date) => ({ temperature, le: date.toISOString() });
+const reglee = (exterieur) => ({ ...piece, anticipation: true, coupure_exterieur: true, exterieur });
+
+test('avance : 3 min par degré sous 15 °C, 45 au plus', () => {
+  assert.equal(avance(15), 0);
+  assert.equal(avance(10), 15);
+  assert.equal(avance(-10), 45);
+});
+test('par temps froid, la plage plus chaude démarre avant son heure', () =>
+  assert.equal(consigneEnVigueur(reglee(dehors(5, mardi6h50)), mardi6h50), 19));
+test('sans anticipation, elle attend son heure', () =>
+  assert.equal(consigneEnVigueur({ ...reglee(dehors(5, mardi6h50)), anticipation: false }, mardi6h50), 16));
+test('au-dessus de 17 °C dehors, pas de chauffe', () =>
+  assert.equal(consigneEnVigueur(reglee(dehors(18, mardi10h)), mardi10h), null));
+test('le manuel prime quand il fait doux', () =>
+  assert.equal(consigneEnVigueur({ ...reglee(dehors(18, mardi10h)), mode: 'manuel', consigne_manuelle: 21 }, mardi10h), 21));
+test('une température extérieure de plus de trois heures ne compte plus', () =>
+  assert.equal(consigneEnVigueur(reglee(dehors(18, new Date(mardi10h.getTime() - 4 * 3_600_000))), mardi10h), 19));
