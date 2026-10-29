@@ -59,3 +59,36 @@ export function doitChauffer(consigne, temperature, chauffe, hysteresis = 0.5) {
   if (temperature > consigne + demi) return false;
   return chauffe;
 }
+
+/**
+ * Les capteurs d'une pièce. Une configuration d'avant les listes ne porte
+ * que `capteur` : il compte, seul.
+ */
+export function capteursDe(piece) {
+  return piece.capteurs?.length ? piece.capteurs : [{ nom: piece.capteur, compte: true }];
+}
+
+const moyenne = (valeurs) => Math.round((valeurs.reduce((a, b) => a + b, 0) / valeurs.length) * 10) / 10;
+
+/**
+ * Ce que mesure une pièce à plusieurs capteurs : la moyenne de ceux qui
+ * comptent, ou le plus froid. Un capteur muet depuis `delai` est écarté ;
+ * quand tous ceux qui comptent le sont, la pièce n'a plus de température et
+ * le radiateur se coupe.
+ *
+ * `mesures` : nom du capteur -> { temperature, humidite, le }.
+ */
+export function mesurePiece(piece, mesures, maintenant, delai) {
+  const vivantes = capteursDe(piece)
+    .filter((c) => c.compte)
+    .map((c) => mesures.get(c.nom))
+    .filter((m) => m?.le && maintenant - Date.parse(m.le) < delai);
+  const temperatures = vivantes.map((m) => m.temperature).filter((t) => typeof t === 'number');
+  if (!temperatures.length) return null;
+  const humidites = vivantes.map((m) => m.humidite).filter((h) => typeof h === 'number');
+  return {
+    temperature: piece.calcul === 'plus_froid' ? Math.min(...temperatures) : moyenne(temperatures),
+    humidite: humidites.length ? moyenne(humidites) : null,
+    le: vivantes.map((m) => m.le).sort().at(-1),
+  };
+}

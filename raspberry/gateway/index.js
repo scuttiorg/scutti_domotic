@@ -1,6 +1,6 @@
 import config from './config.js';
 import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge } from './mqtt.js';
-import { consigneEnVigueur, doitChauffer } from './thermostat.js';
+import { consigneEnVigueur, doitChauffer, capteursDe, mesurePiece } from './thermostat.js';
 import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger } from './scutti.js';
 import { construireAppareils, signature } from './devices.js';
 import EtatLocal from './local.js';
@@ -17,22 +17,41 @@ let nomBoitier = 'Boîtier';
 /** pieceUuid -> { piece, temperature, humidite, chauffe, releveLe } */
 const state = new Map();
 
-/** Sans relevé récent, on ne pilote pas à l'aveugle : radiateur coupé. */
-const capteurVivant = (s) => s.releveLe && Date.now() - Date.parse(s.releveLe) < config.sensorTimeout;
+/**
+ * Le dernier relevé de chaque capteur : nom -> { temperature, humidite, le }.
+ * Un capteur peut servir plusieurs pièces ; il n'est écouté qu'une fois.
+ */
+const mesures = new Map();
 
-function onReleve(uuid, releve) {
-  const s = state.get(uuid);
-  if (!s) return;
-  if (releve.temperature !== undefined) s.temperature = releve.temperature;
-  if (releve.humidite !== undefined) s.humidite = releve.humidite;
-  s.releveLe = new Date().toISOString();
-  reguler(s);
+/** Sans relevé récent d'aucun capteur qui compte, on ne pilote pas à l'aveugle : radiateur coupé. */
+const capteurVivant = (s) => s.temperature !== null;
+
+function onReleve(nom, releve) {
+  const precedent = mesures.get(nom) ?? {};
+  mesures.set(nom, {
+    temperature: releve.temperature ?? precedent.temperature,
+    humidite: releve.humidite ?? precedent.humidite,
+    le: new Date().toISOString(),
+  });
+  for (const s of state.values()) {
+    if (capteursDe(s.piece).some((c) => c.nom === nom)) reguler(s);
+  }
+}
+
+/** La température de la pièce, depuis ses capteurs vivants (thermostat.js). */
+function mesurer(s) {
+  const m = mesurePiece(s.piece, mesures, Date.now(), config.sensorTimeout);
+  s.temperature = m?.temperature ?? null;
+  s.humidite = m?.humidite ?? null;
+  if (m) s.releveLe = m.le;
 }
 
 function reguler(s) {
+  const vivant = capteurVivant(s);
+  mesurer(s);
   const consigne = capteurVivant(s) ? consigneEnVigueur(s.piece) : null;
   const chauffer = doitChauffer(consigne, s.temperature, s.chauffe, s.piece.hysteresis);
-  if (!capteurVivant(s) && s.chauffe) console.warn(`[${s.piece.nom}] capteur muet → coupure de sécurité`);
+  if (vivant && !capteurVivant(s)) console.warn(`[${s.piece.nom}] capteurs muets → coupure de sécurité`);
   if (chauffer !== s.chauffe) {
     s.chauffe = chauffer;
     setPlug(s.piece.prise, chauffer);
@@ -83,26 +102,33 @@ function appliquer(brutes) {
     vues.add(piece.uuid);
     const existant = state.get(piece.uuid);
     if (existant) {
-      if (existant.piece.capteur !== piece.capteur) {
-        unsubscribe(existant.piece.capteur);
-        subscribe(piece.capteur, (r) => onReleve(piece.uuid, r));
-      }
       if (existant.piece.prise !== piece.prise) setPlug(existant.piece.prise, false);
       existant.piece = piece;
       reguler(existant);
     } else {
       state.set(piece.uuid, { piece, temperature: null, humidite: null, chauffe: false, releveLe: null });
-      subscribe(piece.capteur, (r) => onReleve(piece.uuid, r));
       setPlug(piece.prise, false);
     }
   }
+  ecouter(pieces);
   // Une pièce qui n'est plus dans la configuration (supprimée, désactivée,
   // espace retiré) : on la coupe et on l'oublie.
   for (const [uuid, s] of state) {
     if (vues.has(uuid)) continue;
-    unsubscribe(s.piece.capteur);
     setPlug(s.piece.prise, false);
     state.delete(uuid);
+  }
+}
+
+/** Écoute les capteurs dont une pièce a besoin, et ceux-là seulement. */
+function ecouter(pieces) {
+  const utiles = new Set(pieces.flatMap((p) => capteursDe(p).map((c) => c.nom)));
+  for (const nom of mesures.keys()) {
+    if (!utiles.has(nom)) { unsubscribe(nom); mesures.delete(nom); }
+  }
+  for (const nom of utiles) {
+    if (!mesures.has(nom)) mesures.set(nom, {});
+    subscribe(nom, (r) => onReleve(nom, r));
   }
 }
 
@@ -116,7 +142,7 @@ function appliquer(brutes) {
 // d'appuyer sur le bouton de l'appareil, les yeux sur Scutti. Le reste, la
 // batterie et la date, part au plus une fois toutes les cinq minutes.
 
-/** nom Zigbee2MQTT -> { batterie, vuLe } */
+/** nom Zigbee2MQTT -> { batterie, temperature, vuLe } */
 const vus = new Map();
 let inventaire = [];
 let envoiAppareils = null;
@@ -169,7 +195,8 @@ onInventaire((devices) => {
 onVu((nom, payload) => {
   const precedent = vus.get(nom) ?? {};
   const batterie = typeof payload.battery === 'number' ? payload.battery : precedent.batterie;
-  vus.set(nom, { batterie, vuLe: new Date().toISOString() });
+  const temperature = typeof payload.temperature === 'number' ? payload.temperature : precedent.temperature;
+  vus.set(nom, { batterie, temperature, vuLe: new Date().toISOString() });
 });
 
 // ── Les commandes venues de Scutti ──────────────────────────────────────────
@@ -223,7 +250,7 @@ async function pull() {
 
 function push() {
   const releves = [...state.values()]
-    .filter((s) => s.releveLe)
+    .filter((s) => s.releveLe && capteurVivant(s))
     .map((s) => ({
       piece_uuid: s.piece.uuid,
       temperature: s.temperature,
