@@ -45,3 +45,16 @@ test('cent par envoi au plus, et une longue coupure ne remplit pas la mémoire',
   assert.equal(file.aEnvoyer().length, 100);
   assert.equal(file.file.length, 500);
 });
+
+test('un lot s’arrête aussi au poids : Scutti refuserait un envoi de plus de 64 Kio', () => {
+  const t = Date.now();
+  const file = new Basculements(() => t);
+  // Douze prises aux noms longs, allumées : un relevé d'environ 900 octets.
+  const prises = Array.from({ length: 12 }, (_, i) => `batiment-nord/radiateur-de-la-grande-salle-${i}`);
+  for (let i = 100; i > 0; i--) file.noter({ ...releve(i, t), prises_allumees: prises });
+  const lot = file.aEnvoyer();
+  assert.ok(lot.length > 1 && lot.length < 100, `lot de ${lot.length}`);
+  assert.ok(Buffer.byteLength(JSON.stringify({ releves: lot })) < 64 * 1024);
+  file.envoyes(lot.length);
+  assert.equal(file.aEnvoyer()[0].mesure_le, releve(100 - lot.length, t).mesure_le);
+});

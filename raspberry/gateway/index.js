@@ -11,6 +11,9 @@ import Basculements from './basculements.js';
 import { reglagesManquants, ENTRE_DEUX_ESSAIS } from './rapports.js';
 import { suivreFenetre, SUIVI_VIDE } from './fenetre.js';
 import { vitesseMesuree, apprendre } from './vitesse.js';
+import {
+  pilotage, forcageEnVigueur, nouveauForcage, radiateursDe, resumeForcage, TEMPERATURE_MAX_FORCAGE,
+} from './forcage.js';
 
 /** Ce qui a été réglé ICI, avec la date de chaque champ (local.js). */
 const local = new EtatLocal(config.etatFile);
@@ -146,19 +149,54 @@ function reguler(s) {
   if (chauffer !== s.chauffe) {
     noterChauffe(s, chauffer);
     s.chauffe = chauffer;
-    commander(s.piece, chauffer);
-    basculements.noter({
-      piece_uuid: s.piece.uuid,
-      temperature: s.temperature,
-      humidite: s.humidite,
-      chauffe: chauffer,
-      consigne,
-      mesure_le: new Date().toISOString(),
-    });
-    envoyerBasculements();
     const n = prisesDe(s.piece).length;
     console.log(`[${s.piece.nom}] ${s.temperature} °C, consigne ${consigne ?? 'aucune'} → ${n > 1 ? `${n} prises` : 'radiateur'} ${chauffer ? 'ON' : 'OFF'}`);
   }
+  piloter(s, consigne);
+}
+
+// ── La chauffe forcée (forcage.js) ──────────────────────────────────────────
+//
+// `s.chauffe` reste ce que veut la régulation, et la marge s'en sert ;
+// `s.allumees` est ce que les prises font vraiment : celles du forçage, et
+// toutes quand la régulation chauffe. C'est `s.allumees` qui part dans les
+// relevés, pour que Scutti compte ce qui a vraiment consommé.
+
+/** Au moins une prise de la pièce est allumée : ce que les relevés appellent « chauffe ». */
+const allumee = (s) => (s.allumees ?? []).length > 0;
+
+/**
+ * Les prises de la pièce, d'après la régulation et le forçage (forcage.js,
+ * `pilotage`). Un forçage arrêté parce que la pièce dépasse
+ * TEMPERATURE_MAX_FORCAGE s'efface comme un « Arrêter » posé ici, et part à
+ * Scutti. Les prises ne sont commandées que si quelque chose change, et
+ * chaque fois un relevé part aussitôt, horodaté à la seconde.
+ */
+function piloter(s, consigne) {
+  const champ = local.champsPiece(s.piece.uuid).forcage;
+  const p = pilotage(s, champ);
+  if (p.arreter) {
+    local.poserPiece(s.piece.uuid, 'forcage', null);
+    console.warn(`[${s.piece.nom}] ${s.temperature} °C, au-dessus de ${TEMPERATURE_MAX_FORCAGE} °C : chauffe forcée arrêtée`);
+    echangerSansAttendre();
+  }
+  if (!p.commander) return;
+  if (p.forceJusqua !== (s.forceJusqua ?? null)) {
+    console.log(`[${s.piece.nom}] ${p.forcage ? resumeForcage(s.piece, p.forcage, FUSEAU) : 'chauffe forcée finie ou suspendue : régulation normale'}`);
+  }
+  s.allumees = p.allumees;
+  s.forceJusqua = p.forceJusqua;
+  for (const prise of prisesDe(s.piece)) setPlug(prise, p.allumees.includes(prise));
+  basculements.noter({
+    piece_uuid: s.piece.uuid,
+    temperature: s.temperature,
+    humidite: s.humidite,
+    chauffe: allumee(s),
+    consigne,
+    mesure_le: new Date().toISOString(),
+    prises_allumees: p.allumees,
+  });
+  envoyerBasculements();
 }
 
 /**
@@ -186,6 +224,15 @@ function etatsPourScutti() {
     fenetre_jusqua: fenetreJusqua(s),
     vitesse_chauffe: local.vitesse(s.piece.uuid),
   }));
+}
+
+/**
+ * Un échange tout de suite, sans attendre le passage suivant : un forçage
+ * posé ou arrêté ici doit se voir dans Scutti dans la seconde. Un échec
+ * n'est pas une perte, le passage suivant le refera.
+ */
+function echangerSansAttendre() {
+  echangerAvecScutti().catch((e) => console.warn('[scutti] échange impossible :', e.message));
 }
 
 /**
@@ -426,9 +473,12 @@ function push() {
       piece_uuid: s.piece.uuid,
       temperature: s.temperature,
       humidite: s.humidite,
-      chauffe: s.chauffe,
+      chauffe: allumee(s),
       consigne: capteurVivant(s) ? consigneDe(s) : null,
       mesure_le: s.releveLe,
+      // Ce qui a vraiment consommé : Scutti compte chaque radiateur au
+      // prorata de ses prises allumées. Un Scutti d'avant écarte le champ.
+      prises_allumees: s.allumees ?? [],
     }));
   if (releves.length) pushReleves(releves);
   // Ceux qu'une coupure a retenus repartent avec le relevé périodique.
@@ -472,6 +522,13 @@ function noteDe(s) {
   return s.releveLe ? `Mesuré ${new Date(s.releveLe).toLocaleTimeString('fr-FR')}` : 'Aucune mesure';
 }
 
+/** « Chauffe forcée jusqu'à 15 h 30, 2 radiateurs », ou null. */
+function forcageDe(s) {
+  const forcage = forcageEnVigueur(local.champsPiece(s.piece.uuid).forcage, s.piece);
+  if (!forcage) return null;
+  return { resume: resumeForcage(s.piece, forcage, FUSEAU), suspendu: !capteurVivant(s) };
+}
+
 const contexte = {
   get nom() { return nomBoitier; },
   scuttiUrl: config.scutti.url,
@@ -484,9 +541,38 @@ const contexte = {
     mode: s.piece.mode,
     consigne: capteurVivant(s) ? consigneDe(s) : null,
     temperature: s.temperature,
-    chauffe: s.chauffe,
+    chauffe: allumee(s),
     note: noteDe(s),
+    forcage: forcageDe(s),
   })),
+
+  /** Une pièce et ses radiateurs, pour la page qui force la chauffe ; null si inconnue. */
+  piece(uuid) {
+    const s = state.get(uuid);
+    if (!s) return null;
+    return { uuid, nom: s.piece.nom, radiateurs: radiateursDe(s.piece), forcage: forcageDe(s) };
+  },
+
+  /**
+   * Forcer la chauffe : rangé dans l'état local, avec sa date, comme tout
+   * réglage d'ici. Une demande hors bornes ne se pose pas (forcage.js).
+   */
+  async forcer(uuid, rangs, minutes) {
+    const s = state.get(uuid);
+    const valeurPosee = s ? nouveauForcage(s.piece, rangs, minutes) : null;
+    if (!valeurPosee) return;
+    local.poserPiece(uuid, 'forcage', valeurPosee);
+    reguler(s);
+    echangerSansAttendre();
+  },
+
+  async arreterForcage(uuid) {
+    const s = state.get(uuid);
+    if (!s) return;
+    local.poserPiece(uuid, 'forcage', null);
+    reguler(s);
+    echangerSansAttendre();
+  },
 
   appareils: () => construireAppareils(inventaire, vus).map((a) => ({
     ...a,
