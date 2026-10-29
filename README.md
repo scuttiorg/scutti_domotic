@@ -61,10 +61,12 @@ Tests de la logique : `cd raspberry/gateway && npm test`.
 | toutes les `PULL_INTERVAL` s | `GET /configuration` : les pièces de tous les espaces admis, leurs règles, leur mode ; mis en cache |
 | tant qu'une commande attend | le même passage, toutes les `PULL_INTERVAL_RAPIDE` s : `GET /commandes`, exécution sur le bridge (`permit_join`, `device/rename`), puis acquittement |
 | à chaque changement du réseau Zigbee | `PUT /appareils` : la liste entière, avec le type déduit des `exposes`, le modèle, la batterie et la dernière vue ; au plus toutes les `APPAREILS_INTERVAL` s |
-| à chaque relevé MQTT | calcule la consigne en vigueur et pilote la prise (hystérésis) |
+| à chaque relevé MQTT | calcule la consigne en vigueur et pilote ensemble toutes les prises de la pièce (un ou plusieurs radiateurs, une ou plusieurs prises chacun), avec la marge de régulation (hystérésis) |
+| à chaque allumage ou extinction | `POST /releves` aussitôt, horodaté à la seconde : c'est ce que le graphique de Scutti montre ; hors ligne, gardé et renvoyé au retour (jusqu'à 23 h) |
 | toutes les minutes | réévalue les règles horaires, coupe un capteur muet |
 | à chaque passage | `POST /echange` : les pièces et les appareils avec la date de chaque champ, dans les deux sens |
 | toutes les `PUSH_INTERVAL` s | `POST /releves` : température, humidité, état du radiateur, consigne appliquée |
+| quand une prise quitte une pièce | coupée, sauf si une autre pièce la reprend ; une prise ajoutée prend l'état de sa pièce |
 | à l'arrêt | coupe toutes les prises |
 
 ## Sécurité

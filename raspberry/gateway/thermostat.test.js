@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consigneEnVigueur, doitChauffer, mesurePiece, avance } from './thermostat.js';
+import { consigneEnVigueur, doitChauffer, mesurePiece, avance, prisesDe, prisesAPoser } from './thermostat.js';
 
 const piece = {
   mode: 'auto', consigne_defaut: 16, consigne_manuelle: null, manuel_jusqua: null,
@@ -78,3 +78,42 @@ test('le manuel prime quand il fait doux', () =>
   assert.equal(consigneEnVigueur({ ...reglee(dehors(18, mardi10h)), mode: 'manuel', consigne_manuelle: 21 }, mardi10h), 21));
 test('une température extérieure de plus de trois heures ne compte plus', () =>
   assert.equal(consigneEnVigueur(reglee(dehors(18, new Date(mardi10h.getTime() - 4 * 3_600_000))), mardi10h), 19));
+
+// ── Plusieurs radiateurs, plusieurs prises ──────────────────────────────────
+
+test('les prises d’une pièce : la liste, sans doublon, ou la seule d’avant', () => {
+  assert.deepEqual(prisesDe({ prise: 'a', prises: ['a', 'b', 'a'] }), ['a', 'b']);
+  assert.deepEqual(prisesDe({ prise: 'a' }), ['a']);
+  assert.deepEqual(prisesDe({ prise: 'a', prises: [] }), ['a']);
+});
+
+const etat = (uuid, prises, chauffe) => [uuid, { piece: { uuid, prises }, chauffe }];
+
+test('une pièce neuve : toutes ses prises éteintes', () => {
+  assert.deepEqual(prisesAPoser(new Map(), [{ uuid: 'p1', prises: ['a', 'b'] }]), [['a', false], ['b', false]]);
+});
+
+test('rien ne change : aucun ordre, la régulation suffit', () => {
+  const avant = new Map([etat('p1', ['a', 'b'], true)]);
+  assert.deepEqual(prisesAPoser(avant, [{ uuid: 'p1', prises: ['b', 'a'] }]), []);
+});
+
+test('une prise ajoutée prend l’état de la pièce, une prise retirée est coupée', () => {
+  const avant = new Map([etat('p1', ['a', 'b'], true)]);
+  assert.deepEqual(prisesAPoser(avant, [{ uuid: 'p1', prises: ['a', 'c'] }]), [['b', false], ['c', true]]);
+});
+
+test('une prise passée d’une pièce à l’autre prend l’état de la nouvelle, dans les deux ordres', () => {
+  const avant = new Map([etat('p1', ['a', 'b'], false), etat('p2', ['c'], true)]);
+  for (const pieces of [
+    [{ uuid: 'p1', prises: ['a'] }, { uuid: 'p2', prises: ['c', 'b'] }],
+    [{ uuid: 'p2', prises: ['c', 'b'] }, { uuid: 'p1', prises: ['a'] }],
+  ]) {
+    assert.deepEqual(prisesAPoser(avant, pieces), [['b', true]]);
+  }
+});
+
+test('une pièce supprimée : ses prises coupées, sauf celles reprises ailleurs', () => {
+  const avant = new Map([etat('p1', ['a', 'b'], true), etat('p2', ['c'], false)]);
+  assert.deepEqual(prisesAPoser(avant, [{ uuid: 'p2', prises: ['c', 'b'] }]), [['a', false], ['b', false]]);
+});
