@@ -145,7 +145,13 @@ fi
 echo "→ Fichiers"
 mkdir -p "$DEST"/{gateway,web,mosquitto,zigbee2mqtt}
 cp "$HERE/docker-compose.yml" "$DEST/"
-cp "$HERE/mosquitto/mosquitto.conf" "$DEST/mosquitto/"
+# Une configuration de Mosquitto changée ne lui parvient qu'à son
+# redémarrage : `docker compose up -d` ne relance pas un conteneur dont
+# seul un fichier monté a changé.
+if ! cmp -s "$HERE/mosquitto/mosquitto.conf" "$DEST/mosquitto/mosquitto.conf"; then
+  cp "$HERE/mosquitto/mosquitto.conf" "$DEST/mosquitto/"
+  MOSQUITTO_A_RELANCER=1
+fi
 # Le code est remplacé en entier : ce qui a disparu du dépôt disparaît d'ici.
 # Ce que le boîtier a écrit lui-même (.env, cache, dépendances) reste.
 rsync -a --delete --exclude .env --exclude config.cache.json --exclude node_modules \
@@ -200,8 +206,13 @@ if [ ! -f "$DEST/mosquitto/passwd" ]; then
   source "$DEST/.env"
   docker run --rm -v "$DEST/mosquitto:/m" eclipse-mosquitto:2 \
     mosquitto_passwd -c -b /m/passwd "$MQTT_USER" "$MQTT_PASSWORD"
-  chmod 600 "$DEST/mosquitto/passwd"
 fi
+# Le fichier des mots de passe appartient à l'utilisateur de Mosquitto dans
+# son image (1883), en 0600 : c'est lui qui le lit, et les versions récentes
+# refusent un fichier qui n'est pas à lui. Le `chown -R` plus haut le
+# rendait à root à chaque mise à jour.
+chown 1883:1883 "$DEST/mosquitto/passwd"
+chmod 600 "$DEST/mosquitto/passwd"
 
 echo "→ Services"
 cp "$DEST/gateway/chauffage-gateway.service" "$HERE"/systeme/chauffage-{maj,reseau}.{service,timer} /etc/systemd/system/
@@ -246,6 +257,9 @@ echo "→ Démarrage"
 # `up -d` recrée les conteneurs dont la définition a changé, et eux seuls :
 # sans lui, un conteneur d'une version précédente garde ses anciens ports.
 (cd "$DEST" && docker compose up -d)
+if [ -n "${MOSQUITTO_A_RELANCER:-}" ]; then
+  (cd "$DEST" && docker compose restart mosquitto)
+fi
 systemctl restart chauffage-gateway
 
 if [ -n "$SCUTTI_CODE" ]; then
