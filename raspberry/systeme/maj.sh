@@ -11,6 +11,11 @@
 # Sinon le boîtier la réinstallerait toutes les demi-heures, en coupant le
 # chauffage à chaque fois.
 #
+# Elle se lance aussi à la demande, depuis Scutti (« Mettre à jour
+# maintenant ») : la passerelle dépose une demande, chauffage-maj.path la
+# voit et lance ce script. Chaque passage note son résultat dans MAJ_ETAT,
+# que la passerelle remonte à Scutti.
+#
 # Tout le travail est dans main(), appelée en dernière ligne : install.sh
 # réinstalle ce script pendant qu'il tourne, et bash relit un script au fil
 # de l'exécution.
@@ -21,7 +26,12 @@ DEPOT=$DEST/depot
 DEPOT_URL=https://github.com/scuttiorg/scutti_domotic
 BRANCHE=main
 
+DEMANDE=/var/lib/chauffage/demande-maj
+
 version_installee() { cat "$DEST/VERSION" 2>/dev/null || echo aucune; }
+
+# Le dernier passage, pour Scutti (gateway/sante.js) : quand, et ce qu'il a donné.
+noter() { printf '{"le":"%s","resultat":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > "$DEST/MAJ_ETAT"; }
 
 # Mosquitto écoute-t-il ? La passerelle reste « active » sans lui : elle
 # retente la connexion à chaque seconde, mais ne reçoit plus rien et ne
@@ -60,28 +70,37 @@ installer() {
 }
 
 main() {
+  # Prise dès le début : tant qu'elle existe, systemd relancerait ce script.
+  rm -f "$DEMANDE"
   if [ ! -d "$DEPOT/.git" ]; then
     git clone --quiet --depth 1 --branch "$BRANCHE" "$DEPOT_URL" "$DEPOT.tmp"
     mv "$DEPOT.tmp" "$DEPOT"
   fi
-  git -C "$DEPOT" fetch --quiet --depth 1 origin "$BRANCHE"
+  if ! git -C "$DEPOT" fetch --quiet --depth 1 origin "$BRANCHE"; then
+    noter injoignable
+    return 1
+  fi
 
   local cible precedente
   cible=$(git -C "$DEPOT" rev-parse FETCH_HEAD)
   precedente=$(version_installee)
-  [ "$cible" = "$precedente" ] && return 0
-  [ "$cible" = "$(cat "$DEST/VERSION_REFUSEE" 2>/dev/null)" ] && return 0
+  if [ "$cible" = "$precedente" ] || [ "$cible" = "$(cat "$DEST/VERSION_REFUSEE" 2>/dev/null)" ]; then
+    noter a_jour
+    return 0
+  fi
 
   echo "mise à jour : ${precedente:0:7} → ${cible:0:7}"
   MQTT_AVANT=$(mqtt_ecoute && echo oui || true)
   if installer "$cible" && sain; then
     rm -f "$DEST/VERSION_REFUSEE"
+    noter installee
     echo "${cible:0:7} installée"
     return 0
   fi
 
   echo "${cible:0:7} ne tient pas debout : elle ne sera plus retentée" >&2
   echo "$cible" > "$DEST/VERSION_REFUSEE"
+  noter refusee
   # Une installation faite hors dépôt (« inconnue ») n'a pas de version où revenir.
   if [[ "$precedente" =~ ^[0-9a-f]{40}$ ]]; then
     echo "retour à ${precedente:0:7}" >&2

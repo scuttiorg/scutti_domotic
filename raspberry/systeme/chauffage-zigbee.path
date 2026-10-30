@@ -1,0 +1,11 @@
+[Unit]
+Description=Relance de Zigbee2MQTT et Mosquitto demandée par la passerelle
+# Depuis Scutti (« Relancer Zigbee »), ou par la passerelle seule quand
+# Zigbee ne répond plus depuis dix minutes (gateway/sante.js).
+
+[Path]
+PathExists=/var/lib/chauffage/demande-zigbee
+Unit=chauffage-zigbee.service
+
+[Install]
+WantedBy=paths.target

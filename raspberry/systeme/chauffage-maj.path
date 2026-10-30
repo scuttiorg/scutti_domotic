@@ -1,0 +1,11 @@
+[Unit]
+Description=Mise à jour du boîtier demandée depuis Scutti
+# La passerelle dépose la demande (gateway/sante.js) ; maj.sh la retire en
+# commençant. Elle n'a aucun droit d'installer elle-même.
+
+[Path]
+PathExists=/var/lib/chauffage/demande-maj
+Unit=chauffage-maj.service
+
+[Install]
+WantedBy=paths.target

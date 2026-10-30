@@ -127,12 +127,24 @@ fi
 echo "→ Journal conservé d'un démarrage à l'autre"
 # Par défaut, Raspberry Pi OS garde le journal en mémoire : après un
 # redémarrage, plus rien ne dit pourquoi le boîtier avait perdu le wifi.
-# Borné, pour ne pas user la carte SD.
+# Borné, pour ne pas user la carte SD. Écrit sur la carte chaque minute
+# plutôt que toutes les cinq : ce qui précède une coupure de courant est
+# justement ce qu'on cherche.
 if ecrire_si_change /etc/systemd/journald.conf.d/chauffage.conf "[Journal]
 Storage=persistent
-SystemMaxUse=100M"; then
+SystemMaxUse=100M
+SyncIntervalSec=1min"; then
   systemctl restart systemd-journald
 fi
+# Le redémarrage de journald ne suffisait pas : le 29/10, il a continué
+# d'écrire en mémoire, faute du dossier, et la coupure du 30/10 a tout
+# emporté. Le dossier est créé ici, avec ses droits, et ce qui est en
+# mémoire y est versé aussitôt.
+if [ ! -d /var/log/journal ]; then
+  mkdir -p /var/log/journal
+  systemd-tmpfiles --create --prefix /var/log/journal
+fi
+journalctl --flush
 
 echo "→ Tenir debout tout seul"
 # Un boîtier figé (noyau bloqué, carte SD qui ne répond plus) ne se relève
@@ -258,13 +270,18 @@ chown 1883:1883 "$DEST/mosquitto/passwd"
 chmod 600 "$DEST/mosquitto/passwd"
 
 echo "→ Services"
-cp "$DEST/gateway/chauffage-gateway.service" "$HERE"/systeme/chauffage-{maj,reseau,sauvegarde}.{service,timer} /etc/systemd/system/
+cp "$DEST/gateway/chauffage-gateway.service" "$HERE"/systeme/chauffage-{maj,reseau,sauvegarde}.{service,timer} \
+  "$HERE"/systeme/chauffage-{maj,zigbee}.path "$HERE/systeme/chauffage-zigbee.service" /etc/systemd/system/
 install -m 755 "$HERE/systeme/maj.sh" /usr/local/sbin/chauffage-maj
 install -m 755 "$HERE/systeme/reseau.sh" /usr/local/sbin/chauffage-reseau
 install -m 755 "$HERE/systeme/sauvegarde.sh" /usr/local/sbin/chauffage-sauvegarde
+install -m 755 "$HERE/systeme/zigbee.sh" /usr/local/sbin/chauffage-zigbee
 systemctl daemon-reload
 systemctl enable chauffage-gateway
 systemctl enable --now chauffage-maj.timer chauffage-reseau.timer chauffage-sauvegarde.timer
+# Les demandes que la passerelle dépose (gateway/sante.js) : mettre à jour
+# maintenant, relancer Zigbee. Elle n'a aucun droit de le faire elle-même.
+systemctl enable --now chauffage-maj.path chauffage-zigbee.path
 
 if [ -n "$SCUTTI_CODE" ] && [ -n "$SCUTTI_URL" ]; then
   echo "→ Liaison avec Scutti"

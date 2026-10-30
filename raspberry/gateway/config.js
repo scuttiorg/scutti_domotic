@@ -66,6 +66,12 @@ export default {
   // tourne avec ProtectSystem=strict, et c'est le seul dossier où il a le
   // droit d'écrire. Hors systemd (développement), le dossier courant.
   etatFile: join(process.env.STATE_DIRECTORY ?? '.', 'local.json'),
+  // Le même dossier reçoit le cycle (sante.js) et les demandes déposées pour
+  // systemd : mise à jour, relance de Zigbee (systeme/*.path).
+  dossierEtat: process.env.STATE_DIRECTORY ?? '.',
+  // Le dossier du boîtier, où la mise à jour écrit sa version et sa
+  // dernière vérification (systeme/maj.sh).
+  dossierBoitier: process.env.CHAUFFAGE_DIR ?? '/opt/chauffage',
   // L'interface locale, servie sur le réseau du bâtiment. Le boîtier
   // n'ouvre toujours aucun port vers l'extérieur : c'est lui qui appelle.
   localPort: Number(process.env.LOCAL_PORT ?? 8080),
