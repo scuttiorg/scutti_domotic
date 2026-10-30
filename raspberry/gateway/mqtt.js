@@ -1,5 +1,6 @@
 import mqtt from 'mqtt';
 import config from './config.js';
+import { instant } from './horloge.js';
 
 const { url, username, password, baseTopic } = config.mqtt;
 const client = mqtt.connect(url, { username, password });
@@ -8,8 +9,28 @@ const vus = []; // fn(deviceName, payload) : tout ce qui parle, pour la batterie
 const inventaires = []; // fn(devices) : la liste du bridge
 const attentes = new Map(); // sujet de requête -> { repondre }
 
+/**
+ * Où en est la liaison (sante.js) : Mosquitto répond-il, et Zigbee2MQTT
+ * derrière lui ? `zigbee` vaut null tant que le bridge n'a rien dit.
+ * `…Depuis` : le dernier changement, sur le chronomètre (horloge.js).
+ */
+const etat = { mqtt: false, mqttDepuis: instant(), zigbee: null, zigbeeDepuis: instant(), zigbeeVersion: null };
+const changements = [];
+
+function poser(champ, valeur) {
+  if (etat[champ] === valeur) return;
+  etat[champ] = valeur;
+  etat[`${champ}Depuis`] = instant();
+  changements.forEach((fn) => fn());
+}
+
 client.on('connect', () => {
   console.log('[mqtt] connecté');
+  poser('mqtt', true);
+  // L'état du bridge est RETENU : il arrive dès l'abonnement. Hors ligne
+  // veut dire que Zigbee2MQTT est tombé (Mosquitto le dit à sa place).
+  client.subscribe(`${baseTopic}/bridge/state`);
+  client.subscribe(`${baseTopic}/bridge/info`);
   // La liste des appareils est RETENUE par le bridge : on la reçoit dès
   // l'abonnement, puis à chaque changement du réseau (appairage, départ,
   // renommage). C'est elle qui déclenche la remontée vers Scutti.
@@ -17,6 +38,7 @@ client.on('connect', () => {
   client.subscribe(`${baseTopic}/bridge/response/#`);
 });
 client.on('error', (e) => console.error('[mqtt]', e.message));
+client.on('close', () => poser('mqtt', false));
 
 /** Ne laisse passer que des nombres plausibles ; tout le reste est ignoré. */
 function sanitize(payload) {
@@ -32,8 +54,22 @@ function sanitize(payload) {
 client.on('message', (topic, buffer) => {
   const name = topic.slice(baseTopic.length + 1);
 
+  // Zigbee2MQTT 1 écrit `online` en clair, Zigbee2MQTT 2 `{"state":"online"}`.
+  if (name === 'bridge/state') {
+    const texte = buffer.toString();
+    let brut = texte;
+    try { brut = JSON.parse(texte)?.state ?? texte; } catch { /* en clair */ }
+    poser('zigbee', brut === 'online');
+    return;
+  }
+
   let payload;
   try { payload = JSON.parse(buffer.toString()); } catch { payload = null; }
+
+  if (name === 'bridge/info') {
+    if (typeof payload?.version === 'string') etat.zigbeeVersion = payload.version.slice(0, 40);
+    return;
+  }
 
   if (name === 'bridge/devices') {
     if (Array.isArray(payload)) inventaires.forEach((fn) => fn(payload));
@@ -113,4 +149,14 @@ export function requeteBridge(sujet, payload, delai = 15_000) {
 
     client.publish(`${baseTopic}/bridge/request/${sujet}`, JSON.stringify(payload));
   });
+}
+
+/** Où en est la liaison avec Mosquitto et Zigbee2MQTT (une copie). */
+export function liaison() {
+  return { ...etat };
+}
+
+/** À chaque fois que Mosquitto ou Zigbee2MQTT tombe ou revient. */
+export function onLiaison(fn) {
+  changements.push(fn);
 }

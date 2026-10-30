@@ -234,19 +234,22 @@ const moyenne = (valeurs) => Math.round((valeurs.reduce((a, b) => a + b, 0) / va
  * quand tous ceux qui comptent le sont, la pièce n'a plus de température et
  * le radiateur se coupe.
  *
- * `mesures` : nom du capteur -> { temperature, humidite, le }.
+ * `mesures` : nom du capteur -> { temperature, humidite, vu }. `vu` et
+ * `maintenant` se lisent sur le chronomètre (horloge.js, `instant`), jamais
+ * sur l'heure du boîtier, qui saute quand il se remet à l'heure. La mesure
+ * rendue porte le `vu` du capteur le plus récent.
  */
 export function mesurePiece(piece, mesures, maintenant, delai) {
   const vivantes = capteursDe(piece)
     .filter((c) => c.compte)
     .map((c) => mesures.get(c.nom))
-    .filter((m) => m?.le && maintenant - Date.parse(m.le) < delai);
+    .filter((m) => typeof m?.vu === 'number' && maintenant - m.vu < delai);
   const temperatures = vivantes.map((m) => m.temperature).filter((t) => typeof t === 'number');
   if (!temperatures.length) return null;
   const humidites = vivantes.map((m) => m.humidite).filter((h) => typeof h === 'number');
   return {
     temperature: piece.calcul === 'plus_froid' ? Math.min(...temperatures) : moyenne(temperatures),
     humidite: humidites.length ? moyenne(humidites) : null,
-    le: vivantes.map((m) => m.le).sort().at(-1),
+    vu: Math.max(...vivantes.map((m) => m.vu)),
   };
 }

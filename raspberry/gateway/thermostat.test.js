@@ -38,18 +38,19 @@ test('hystérésis : conserve l’état dans la bande', () => {
 test('hystérésis : éteint au-dessus de consigne + h/2', () => assert.equal(doitChauffer(19, 19.4, true, 0.5), false));
 test('sans température → jamais chauffer', () => assert.equal(doitChauffer(19, null, true, 0.5), false));
 
-const t0 = Date.parse('2026-10-28T12:00:00Z');
-const il = (min) => new Date(t0 - min * 60_000).toISOString();
+// Le chronomètre du boîtier (horloge.js) : des millisecondes, sans date.
+const t0 = 5_000_000;
+const il = (min) => t0 - min * 60_000;
 const mesures = new Map([
-  ['salon', { temperature: 20, humidite: 50, le: il(1) }],
-  ['fenetre', { temperature: 17, humidite: 60, le: il(2) }],
-  ['muet', { temperature: 10, humidite: 90, le: il(30) }],
+  ['salon', { temperature: 20, humidite: 50, vu: il(1) }],
+  ['fenetre', { temperature: 17, humidite: 60, vu: il(2) }],
+  ['muet', { temperature: 10, humidite: 90, vu: il(30) }],
 ]);
 const trois = { capteurs: [{ nom: 'salon', compte: true }, { nom: 'fenetre', compte: true }, { nom: 'muet', compte: true }] };
 const vingtMin = 20 * 60_000;
 
 test('plusieurs capteurs : moyenne de ceux qui parlent, muet écarté', () =>
-  assert.deepEqual(mesurePiece({ ...trois, calcul: 'moyenne' }, mesures, t0, vingtMin), { temperature: 18.5, humidite: 55, le: il(1) }));
+  assert.deepEqual(mesurePiece({ ...trois, calcul: 'moyenne' }, mesures, t0, vingtMin), { temperature: 18.5, humidite: 55, vu: il(1) }));
 test('plusieurs capteurs : le plus froid', () =>
   assert.equal(mesurePiece({ ...trois, calcul: 'plus_froid' }, mesures, t0, vingtMin).temperature, 17));
 test('un capteur qui ne compte pas est ignoré', () => {

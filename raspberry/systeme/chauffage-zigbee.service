@@ -1,0 +1,7 @@
+[Unit]
+Description=Relancer Zigbee2MQTT et Mosquitto
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chauffage-zigbee

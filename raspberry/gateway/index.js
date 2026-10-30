@@ -1,7 +1,10 @@
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import os from 'node:os';
 import config from './config.js';
-import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge } from './mqtt.js';
+import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge, liaison, onLiaison } from './mqtt.js';
 import { consigneEnVigueur, doitChauffer, capteursDe, prisesDe, prisesAPoser, mesurePiece, FUSEAU } from './thermostat.js';
-import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger } from './scutti.js';
+import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger, putEtat } from './scutti.js';
 import { construireAppareils, signature } from './devices.js';
 import EtatLocal from './local.js';
 import { valeur } from './fusion.js';
@@ -11,6 +14,11 @@ import Basculements from './basculements.js';
 import { reglagesManquants, ENTRE_DEUX_ESSAIS } from './rapports.js';
 import { suivreFenetre, SUIVI_VIDE } from './fenetre.js';
 import { vitesseMesuree, apprendre } from './vitesse.js';
+import { instant, dateDe } from './horloge.js';
+import {
+  causeDuDemarrage, lireCycle, ecrireCycle, relanceZigbeeDue, mesuresSysteme, bootId, redemarrageReseauLe,
+  etatMiseAJour, deposerDemande,
+} from './sante.js';
 import {
   pilotage, forcageEnVigueur, nouveauForcage, radiateursDe, resumeForcage, TEMPERATURE_MAX_FORCAGE,
 } from './forcage.js';
@@ -41,8 +49,10 @@ const pieceNeuve = (piece) => ({
 });
 
 /**
- * Le dernier relevé de chaque capteur : nom -> { temperature, humidite, le }.
- * Un capteur peut servir plusieurs pièces ; il n'est écouté qu'une fois.
+ * Le dernier relevé de chaque capteur : nom -> { temperature, humidite, vu }.
+ * `vu` se lit sur le chronomètre (horloge.js) : l'heure du boîtier saute
+ * quand il se remet à l'heure, et un relevé frais paraissait vieux de deux
+ * heures. Un capteur peut servir plusieurs pièces ; il n'est écouté qu'une fois.
  */
 const mesures = new Map();
 
@@ -54,20 +64,24 @@ function onReleve(nom, releve) {
   mesures.set(nom, {
     temperature: releve.temperature ?? precedent.temperature,
     humidite: releve.humidite ?? precedent.humidite,
-    le: new Date().toISOString(),
+    vu: instant(),
   });
   for (const s of state.values()) {
     if (capteursDe(s.piece).some((c) => c.nom === nom)) reguler(s);
   }
 }
 
-/** La température de la pièce, depuis ses capteurs vivants (thermostat.js) ; rend la mesure, ou null. */
+/**
+ * La température de la pièce, depuis ses capteurs vivants (thermostat.js) ;
+ * rend la mesure avec son heure (`le`, en ISO), ou null.
+ */
 function mesurer(s) {
-  const m = mesurePiece(s.piece, mesures, Date.now(), config.sensorTimeout);
+  const m = mesurePiece(s.piece, mesures, instant(), config.sensorTimeout);
   s.temperature = m?.temperature ?? null;
   s.humidite = m?.humidite ?? null;
-  if (m) s.releveLe = m.le;
-  return m;
+  if (!m) return null;
+  s.releveLe = dateDe(m.vu).toISOString();
+  return { ...m, le: s.releveLe };
 }
 
 /** La fin de la coupure pour fenêtre ouverte, en ISO, ou null. */
@@ -105,7 +119,8 @@ function suivreLaFenetre(s, mesure) {
  * elle apprend quelque chose, met à jour la vitesse de la pièce (vitesse.js).
  */
 function noterChauffe(s, allume) {
-  const maintenant = Date.now();
+  // Une durée : le chronomètre, pas l'heure, qui saute au démarrage.
+  const maintenant = instant();
   if (allume) {
     s.chauffeDepuis = { le: maintenant, temperature: s.temperature };
     return;
@@ -416,6 +431,115 @@ function reglerSiBesoin(nom) {
     .catch((e) => console.warn(`[capteurs] ${nom} pas encore réglé (${e.message}) : nouvel essai à un prochain réveil`));
 }
 
+// ── La santé du boîtier (sante.js) ──────────────────────────────────────────
+//
+// Ce qu'on irait lire sur place, envoyé à Scutti au démarrage, toutes les
+// cinq minutes, et dès que Mosquitto ou Zigbee2MQTT tombe ou revient.
+//
+// LES DATES PARTENT EN DURÉES (« depuis 340 s »), que Scutti date avec sa
+// propre horloge : au démarrage, celle du boîtier est fausse tant qu'il ne
+// s'est pas recalé, et c'est justement l'état qu'il envoie à ce moment-là
+// qui dit pourquoi il a redémarré.
+
+const fichierCycle = join(config.dossierEtat, 'cycle.json');
+/** Le cycle du démarrage d'avant : d'où se lit la cause de celui-ci. */
+const cyclePrecedent = lireCycle(fichierCycle);
+const cycle = {
+  boot_id: bootId(),
+  version: etatMiseAJour(config.dossierBoitier).version,
+  demarre_le: new Date().toISOString(),
+  arret_le: null,
+};
+ecrireCycle(fichierCycle, cycle);
+const passerelleDemarree = instant();
+/** Ce démarrage-ci : Scutti y reconnaît un démarrage nouveau, quoi que dise l'heure. */
+const demarrageId = randomUUID();
+
+/** La dernière alarme de sous-tension vue depuis le démarrage (chronomètre), ou null. */
+let sousTensionVue = null;
+/** Les relances de Zigbee décidées ici : la dernière (chronomètre), et combien depuis que tout répondait. */
+const relances = { derniere: null, suite: 0 };
+
+/** Les secondes écoulées depuis un instant du chronomètre ; null pour null. */
+const ilYA = (vu) => (vu === null ? null : Math.max(0, Math.round((instant() - vu) / 1000)));
+
+function etatDuBoitier() {
+  const maj = etatMiseAJour(config.dossierBoitier);
+  const l = liaison();
+  const systeme = mesuresSysteme();
+  const boitierDepuis = Math.round(os.uptime());
+  return {
+    version: maj.version,
+    version_refusee: maj.version_refusee,
+    // Écrite par maj.sh, qui vient de joindre GitHub : l'heure est juste.
+    maj: { verifiee_le: maj.verifiee_le, resultat: maj.resultat },
+    demarrage: {
+      id: demarrageId,
+      cause: causeDuDemarrage({
+        precedent: cyclePrecedent, bootId: cycle.boot_id, version: cycle.version,
+        boitierLe: Date.now() - boitierDepuis * 1000, reseauLe: redemarrageReseauLe(),
+      }),
+      boitier_depuis_s: boitierDepuis,
+      passerelle_depuis_s: ilYA(passerelleDemarree),
+      // Écrit à l'arrêt précédent, par un boîtier qui avait l'heure.
+      arret_precedent_le: cyclePrecedent?.arret_le ?? null,
+    },
+    mqtt: { connecte: l.mqtt, depuis_s: ilYA(l.mqttDepuis) },
+    zigbee: {
+      en_ligne: l.zigbee, depuis_s: ilYA(l.zigbeeDepuis), version: l.zigbeeVersion,
+      relance_auto_il_y_a_s: ilYA(relances.derniere),
+    },
+    systeme: { ...systeme, sous_tension_il_y_a_s: ilYA(sousTensionVue) },
+  };
+}
+
+let etatEnVol = false;
+async function envoyerEtat() {
+  if (etatEnVol) return;
+  etatEnVol = true;
+  try {
+    await putEtat(etatDuBoitier());
+  } finally {
+    etatEnVol = false;
+  }
+}
+
+let etatBientot = null;
+onLiaison(() => {
+  const l = liaison();
+  console.log(`[santé] Mosquitto ${l.mqtt ? 'joignable' : 'injoignable'}, Zigbee2MQTT ${l.zigbee === null ? 'muet' : l.zigbee ? 'en ligne' : 'hors ligne'}`);
+  if (l.mqtt && l.zigbee) relances.suite = 0;
+  // Groupés : une relance fait tomber et revenir les deux en quelques secondes.
+  clearTimeout(etatBientot);
+  etatBientot = setTimeout(envoyerEtat, 5_000);
+});
+
+/** Chaque minute : l'alimentation, et Zigbee qui ne répond plus. */
+function surveiller() {
+  const maintenant = instant();
+  if (mesuresSysteme().sous_tension) {
+    if (sousTensionVue === null) console.warn('[santé] alimentation trop faible (sous-tension) : changer le bloc secteur ou le câble');
+    sousTensionVue = maintenant;
+  }
+  if (relanceZigbeeDue(liaison(), relances, maintenant) && deposerDemande(config.dossierEtat, 'zigbee')) {
+    relances.derniere = maintenant;
+    relances.suite += 1;
+    console.warn(`[santé] Zigbee2MQTT ou Mosquitto ne répond plus : relance n° ${relances.suite} demandée`);
+    envoyerEtat();
+  }
+}
+
+/**
+ * Une demande pour systemd, qui seul a le droit de mettre à jour ou de
+ * toucher à Docker. Ce qu'elle donne se lit dans l'état : on l'envoie dans
+ * la minute (une mise à jour qui installe, elle, relance la passerelle, et
+ * l'état part au démarrage).
+ */
+function demanderAuSysteme(quoi) {
+  if (!deposerDemande(config.dossierEtat, quoi)) throw new Error('demande non déposée sur le boîtier');
+  setTimeout(envoyerEtat, 60_000);
+}
+
 // ── Les commandes venues de Scutti ──────────────────────────────────────────
 
 /** Ce que chaque type de commande demande au bridge. */
@@ -431,6 +555,8 @@ async function executer(commande) {
   if (commande.type === 'rename') {
     return requeteBridge('device/rename', { from: commande.charge?.de, to: commande.charge?.vers });
   }
+  if (commande.type === 'mettre_a_jour') return demanderAuSysteme('maj');
+  if (commande.type === 'relancer_zigbee') return demanderAuSysteme('zigbee');
   throw new Error(`type de commande inconnu : ${commande.type}`);
 }
 
@@ -611,10 +737,15 @@ if (config.localPort === 0) {
 // Réévaluation périodique : les règles horaires changent sans nouveau relevé.
 setInterval(() => state.forEach(reguler), 60_000);
 setInterval(push, config.pushInterval);
+setInterval(surveiller, 60_000);
+setInterval(envoyerEtat, config.pushInterval);
 
 // Arrêt propre : tout couper avant de quitter.
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
+    // D'abord, et d'un coup : au démarrage suivant, c'est ce qui dit que
+    // le boîtier s'est arrêté de lui-même, et pas faute de courant.
+    ecrireCycle(fichierCycle, { ...cycle, arret_le: new Date().toISOString() });
     state.forEach((s) => commander(s.piece, false));
     setTimeout(() => process.exit(0), 500);
   });
@@ -622,3 +753,4 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 
 await pull();
 console.log(`[gateway] ${state.size} pièce(s) pilotée(s)`);
+envoyerEtat();

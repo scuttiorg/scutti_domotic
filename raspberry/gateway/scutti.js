@@ -98,3 +98,12 @@ export async function putAppareils(appareils) {
   try { await call('PUT', '/appareils', { appareils }); return true; }
   catch (e) { console.warn('[scutti] envoi des appareils échoué :', e.message); return false; }
 }
+
+/**
+ * La santé du boîtier (sante.js). Rend vrai si elle est arrivée ; un Scutti
+ * qui ne connaît pas encore la route répond 404, et le boîtier continue.
+ */
+export async function putEtat(etat) {
+  try { await call('PUT', '/etat', etat); return true; }
+  catch (e) { console.warn('[scutti] envoi de l’état du boîtier échoué :', e.message); return false; }
+}
