@@ -58,6 +58,9 @@ export function construireAppareils(devices, vus = new Map()) {
         modele: d.definition?.model ?? null,
         batterie: typeof vu.batterie === 'number' ? vu.batterie : null,
         temperature: typeof vu.temperature === 'number' ? vu.temperature : null,
+        // Ce que mesure une prise (puissance.js) : watts et compteur en kWh.
+        puissance: typeof vu.puissance === 'number' ? vu.puissance : null,
+        energie: typeof vu.energie === 'number' ? vu.energie : null,
         vu_le: vu.vuLe ?? null,
       };
     });
@@ -65,8 +68,8 @@ export function construireAppareils(devices, vus = new Map()) {
 
 /**
  * Ce qui, dans la liste, décrit le RÉSEAU : qui est là, sous quel nom, de
- * quel type. La batterie, la température et la date de dernière vue en sont
- * exclues : elles
+ * quel type. La batterie, la température, la puissance et la date de
+ * dernière vue en sont exclues : elles
  * changent à chaque relevé, et c'est pour elles seules que vaut le plancher
  * entre deux envois.
  *

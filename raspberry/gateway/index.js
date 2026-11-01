@@ -2,7 +2,8 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import config from './config.js';
-import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge, liaison, onLiaison } from './mqtt.js';
+import { subscribe, unsubscribe, suivre, nePlusSuivre, interroger, setPlug, onInventaire, onVu, requeteBridge, liaison, onLiaison } from './mqtt.js';
+import { puissanceLue, energieLue, puissanceMesuree, mesureValable } from './puissance.js';
 import { consigneEnVigueur, doitChauffer, capteursDe, prisesDe, prisesAPoser, mesurePiece, FUSEAU } from './thermostat.js';
 import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger, putEtat } from './scutti.js';
 import { construireAppareils, signature } from './devices.js';
@@ -150,9 +151,19 @@ async function envoyerBasculements() {
   }
 }
 
+/**
+ * Commander une prise, et retenir quand : la mesure qui suit de trop près
+ * n'est pas encore celle du nouvel état (puissance.js).
+ */
+const commandesPrises = new Map();
+function poserPrise(prise, allume) {
+  commandesPrises.set(prise, Date.now());
+  setPlug(prise, allume);
+}
+
 /** Toutes les prises de la pièce, dans le même état. */
 function commander(piece, allume) {
-  for (const prise of prisesDe(piece)) setPlug(prise, allume);
+  for (const prise of prisesDe(piece)) poserPrise(prise, allume);
 }
 
 function reguler(s) {
@@ -201,7 +212,7 @@ function piloter(s, consigne) {
   }
   s.allumees = p.allumees;
   s.forceJusqua = p.forceJusqua;
-  for (const prise of prisesDe(s.piece)) setPlug(prise, p.allumees.includes(prise));
+  for (const prise of prisesDe(s.piece)) poserPrise(prise, p.allumees.includes(prise));
   basculements.noter({
     piece_uuid: s.piece.uuid,
     temperature: s.temperature,
@@ -276,7 +287,7 @@ function recouvrir(piece) {
 function appliquer(brutes) {
   const pieces = brutes.map(recouvrir).filter((p) => p.actif !== false);
   // Les prises retirées, ajoutées ou passées d'une pièce à l'autre (thermostat.js).
-  for (const [prise, allumee] of prisesAPoser(state, pieces)) setPlug(prise, allumee);
+  for (const [prise, allumee] of prisesAPoser(state, pieces)) poserPrise(prise, allumee);
 
   const vues = new Set();
   for (const piece of pieces) {
@@ -297,7 +308,10 @@ function appliquer(brutes) {
   }
 }
 
-/** Écoute les capteurs dont une pièce a besoin, et ceux-là seulement. */
+/** Les prises écoutées, pour ce qu'elles mesurent (puissance.js). */
+const prisesSuivies = new Set();
+
+/** Écoute les capteurs et les prises dont une pièce a besoin, et ceux-là seulement. */
 function ecouter(pieces) {
   const utiles = new Set(pieces.flatMap((p) => capteursDe(p).map((c) => c.nom)));
   for (const nom of mesures.keys()) {
@@ -306,6 +320,13 @@ function ecouter(pieces) {
   for (const nom of utiles) {
     if (!mesures.has(nom)) mesures.set(nom, {});
     subscribe(nom, (r) => onReleve(nom, r));
+  }
+  const prises = new Set(pieces.flatMap(prisesDe));
+  for (const nom of prisesSuivies) {
+    if (!prises.has(nom)) { nePlusSuivre(nom); prisesSuivies.delete(nom); }
+  }
+  for (const nom of prises) {
+    if (!prisesSuivies.has(nom)) { suivre(nom); prisesSuivies.add(nom); }
   }
 }
 
@@ -319,7 +340,7 @@ function ecouter(pieces) {
 // d'appuyer sur le bouton de l'appareil, les yeux sur Scutti. Le reste, la
 // batterie et la date, part au plus une fois toutes les cinq minutes.
 
-/** nom Zigbee2MQTT -> { batterie, temperature, vuLe } */
+/** nom Zigbee2MQTT -> { batterie, temperature, puissance, puissanceLe, energie, vuLe } */
 const vus = new Map();
 let inventaire = [];
 let envoiAppareils = null;
@@ -373,7 +394,17 @@ onVu((nom, payload) => {
   const precedent = vus.get(nom) ?? {};
   const batterie = typeof payload.battery === 'number' ? payload.battery : precedent.batterie;
   const temperature = typeof payload.temperature === 'number' ? payload.temperature : precedent.temperature;
-  vus.set(nom, { batterie, temperature, vuLe: new Date().toISOString() });
+  const maintenant = new Date().toISOString();
+  // Une prise qui mesure : sa puissance, datée, et son compteur (puissance.js).
+  const puissance = puissanceLue(payload);
+  vus.set(nom, {
+    batterie,
+    temperature,
+    puissance: puissance ?? precedent.puissance,
+    puissanceLe: puissance !== null ? maintenant : precedent.puissanceLe,
+    energie: energieLue(payload) ?? precedent.energie,
+    vuLe: maintenant,
+  });
   // La date et la batterie partent elles aussi, au plancher : sans cela,
   // elles n'arrivaient à Scutti qu'avec un changement du réseau, et un
   // thermomètre qui parlait toutes les cinq minutes y était dit « muet
@@ -605,8 +636,16 @@ function push() {
       // Ce qui a vraiment consommé : Scutti compte chaque radiateur au
       // prorata de ses prises allumées. Un Scutti d'avant écarte le champ.
       prises_allumees: s.allumees ?? [],
+      // Ce que les prises ont mesuré (puissance.js), ou null : Scutti garde
+      // alors son estimation. Les relevés de bascule n'en portent jamais.
+      puissance: puissanceMesuree(prisesDe(s.piece), vus, commandesPrises, Date.now()),
     }));
   if (releves.length) pushReleves(releves);
+  // Une prise sans mesure valable est interrogée : la réponse servira au
+  // relevé suivant.
+  for (const prise of prisesSuivies) {
+    if (mesureValable(vus.get(prise), commandesPrises.get(prise), Date.now()) === null) interroger(prise, ['power', 'energy']);
+  }
   // Ceux qu'une coupure a retenus repartent avec le relevé périodique.
   envoyerBasculements();
 }
