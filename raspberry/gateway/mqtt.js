@@ -107,6 +107,27 @@ export function unsubscribe(deviceName) {
   client.unsubscribe(`${baseTopic}/${deviceName}`);
 }
 
+/**
+ * Écouter une prise : ses messages ne portent pas de température, seulement
+ * son état et ce qu'elle mesure (puissance.js), qui passent par `onVu`.
+ */
+export function suivre(deviceName) {
+  client.subscribe(`${baseTopic}/${deviceName}`);
+}
+
+export function nePlusSuivre(deviceName) {
+  if (!listeners.has(deviceName)) client.unsubscribe(`${baseTopic}/${deviceName}`);
+}
+
+/**
+ * Demander à un appareil de relire des propriétés : une prise n'envoie sa
+ * puissance que lorsqu'elle change, et un radiateur allumé depuis une heure
+ * ne change plus.
+ */
+export function interroger(deviceName, proprietes) {
+  client.publish(`${baseTopic}/${deviceName}/get`, JSON.stringify(Object.fromEntries(proprietes.map((p) => [p, '']))));
+}
+
 export function setPlug(deviceName, on) {
   client.publish(`${baseTopic}/${deviceName}/set`, JSON.stringify({ state: on ? 'ON' : 'OFF' }));
 }

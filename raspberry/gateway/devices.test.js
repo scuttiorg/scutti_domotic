@@ -81,3 +81,13 @@ test('l’ordre de la liste ne change pas la signature', () => {
   const b = { ieee: '0x0003', nom_z2m: 'b', type: 'prise', modele: null };
   assert.equal(signature([a, b]), signature([b, a]));
 });
+
+test('une prise qui mesure dit sa puissance et son compteur', () => {
+  const vus = new Map([['atelier/prise', { puissance: 1486, energie: 12.4, vuLe: '2026-11-01T12:00:00.000Z' }]]);
+  const [prise] = construireAppareils([
+    { type: 'Router', ieee_address: '0x0003', friendly_name: 'atelier/prise', definition: { model: 'A7Z', exposes: [{ property: 'state', access: 7 }, { property: 'power', access: 5 }] } },
+  ], vus);
+  assert.equal(prise.puissance, 1486);
+  assert.equal(prise.energie, 12.4);
+  assert.equal(signature([prise]), signature([{ ...prise, puissance: 0, energie: 13 }]), 'la puissance ne change pas le réseau');
+});
