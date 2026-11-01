@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deduireType, construireAppareils, signature } from './devices.js';
+import { deduireType, construireAppareils, signature, mesuresDe, mesure } from './devices.js';
 
 test('un appareil qui mesure une température est un capteur', () => {
   const definition = { exposes: [{ property: 'temperature', access: 1 }, { property: 'battery', access: 1 }] };
@@ -80,4 +80,40 @@ test('l’ordre de la liste ne change pas la signature', () => {
   const a = { ieee: '0x0002', nom_z2m: 'a', type: 'capteur', modele: null };
   const b = { ieee: '0x0003', nom_z2m: 'b', type: 'prise', modele: null };
   assert.equal(signature([a, b]), signature([b, a]));
+});
+
+test('une prise dit ce qu’on peut lui faire relire, puissance puis compteur', () => {
+  const prise = {
+    exposes: [
+      { type: 'switch', features: [{ property: 'state', access: 7 }] },
+      { property: 'energy', access: 5 },
+      { property: 'power', access: 5 },
+      { property: 'voltage', access: 5 },
+    ],
+  };
+  assert.deepEqual(mesuresDe(prise), ['power', 'energy']);
+  assert.deepEqual(mesuresDe({ exposes: [{ property: 'state', access: 7 }] }), []);
+  // Publiée, mais qu'on ne peut pas lui demander de relire.
+  assert.deepEqual(mesuresDe({ exposes: [{ property: 'energy', access: 1 }] }), []);
+  assert.deepEqual(mesuresDe(undefined), []);
+});
+
+test('la puissance et le compteur d’une prise partent avec la liste, sans changer la signature', () => {
+  const devices = [{ type: 'Router', ieee_address: '0x0004', friendly_name: 'atelier/prise', definition: { exposes: [{ property: 'state', access: 7 }] } }];
+  const [avant] = construireAppareils(devices, new Map([['atelier/prise', { puissance: 0, energie: 12.4 }]]));
+  const [apres] = construireAppareils(devices, new Map([['atelier/prise', { puissance: 1432, energie: 12.6 }]]));
+  assert.equal(avant.puissance_w, 0);
+  assert.equal(apres.puissance_w, 1432);
+  assert.equal(apres.energie_kwh, 12.6);
+  assert.equal(signature([avant]), signature([apres]));
+});
+
+test('une mesure de travers ne part pas', () => {
+  assert.equal(mesure(-3), null);
+  assert.equal(mesure(Number.NaN), null);
+  assert.equal(mesure('12'), null);
+  assert.equal(mesure(0), 0);
+  const [prise] = construireAppareils([{ type: 'Router', ieee_address: '0x0005', friendly_name: 'p', definition: { exposes: [] } }]);
+  assert.equal(prise.puissance_w, null);
+  assert.equal(prise.energie_kwh, null);
 });

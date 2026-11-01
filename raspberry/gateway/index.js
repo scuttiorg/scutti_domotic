@@ -2,10 +2,10 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import config from './config.js';
-import { subscribe, unsubscribe, setPlug, onInventaire, onVu, requeteBridge, liaison, onLiaison } from './mqtt.js';
+import { subscribe, unsubscribe, setPlug, lire, onInventaire, onVu, requeteBridge, liaison, onLiaison } from './mqtt.js';
 import { consigneEnVigueur, doitChauffer, capteursDe, prisesDe, prisesAPoser, mesurePiece, FUSEAU } from './thermostat.js';
 import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger, putEtat } from './scutti.js';
-import { construireAppareils, signature } from './devices.js';
+import { construireAppareils, signature, mesuresDe, mesure } from './devices.js';
 import EtatLocal from './local.js';
 import { valeur } from './fusion.js';
 import { demarrerInterfaceLocale } from './web.js';
@@ -319,7 +319,7 @@ function ecouter(pieces) {
 // d'appuyer sur le bouton de l'appareil, les yeux sur Scutti. Le reste, la
 // batterie et la date, part au plus une fois toutes les cinq minutes.
 
-/** nom Zigbee2MQTT -> { batterie, temperature, vuLe } */
+/** nom Zigbee2MQTT -> { batterie, temperature, puissance, energie, vuLe } */
 const vus = new Map();
 let inventaire = [];
 let envoiAppareils = null;
@@ -373,7 +373,9 @@ onVu((nom, payload) => {
   const precedent = vus.get(nom) ?? {};
   const batterie = typeof payload.battery === 'number' ? payload.battery : precedent.batterie;
   const temperature = typeof payload.temperature === 'number' ? payload.temperature : precedent.temperature;
-  vus.set(nom, { batterie, temperature, vuLe: new Date().toISOString() });
+  const puissance = mesure(payload.power) ?? precedent.puissance;
+  const energie = mesure(payload.energy) ?? precedent.energie;
+  vus.set(nom, { batterie, temperature, puissance, energie, vuLe: new Date().toISOString() });
   // La date et la batterie partent elles aussi, au plancher : sans cela,
   // elles n'arrivaient à Scutti qu'avec un changement du réseau, et un
   // thermomètre qui parlait toutes les cinq minutes y était dit « muet
@@ -381,6 +383,22 @@ onVu((nom, payload) => {
   planifierAppareils();
   reglerSiBesoin(nom);
 });
+
+// ── Ce que mesurent les prises ──────────────────────────────────────────────
+//
+// Une prise qui mesure tient son compteur (kWh) elle-même : Scutti en tire
+// la consommation réelle, par différence entre deux valeurs. Beaucoup ne
+// l'envoient que s'il a assez changé, ou pas du tout sans qu'on le leur
+// demande (certaines prises Tuya) : on le leur demande donc, avec la
+// puissance du moment, au rythme où la liste part à Scutti. La réponse
+// arrive sur le sujet de la prise, et passe par `onVu` comme le reste.
+
+function lireLesPrises() {
+  for (const appareil of inventaire) {
+    const proprietes = mesuresDe(appareil.definition);
+    if (appareil.friendly_name && proprietes.length) lire(appareil.friendly_name, proprietes);
+  }
+}
 
 // ── Des capteurs qui parlent plus souvent (rapports.js) ─────────────────────
 
@@ -739,6 +757,7 @@ setInterval(() => state.forEach(reguler), 60_000);
 setInterval(push, config.pushInterval);
 setInterval(surveiller, 60_000);
 setInterval(envoyerEtat, config.pushInterval);
+setInterval(lireLesPrises, config.appareilsInterval);
 
 // Arrêt propre : tout couper avant de quitter.
 for (const sig of ['SIGINT', 'SIGTERM']) {

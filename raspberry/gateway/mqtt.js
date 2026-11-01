@@ -111,6 +111,14 @@ export function setPlug(deviceName, on) {
   client.publish(`${baseTopic}/${deviceName}/set`, JSON.stringify({ state: on ? 'ON' : 'OFF' }));
 }
 
+/**
+ * Demande à un appareil de relire ces propriétés : il répond sur son sujet,
+ * comme s'il les avait envoyées de lui-même.
+ */
+export function lire(deviceName, proprietes) {
+  client.publish(`${baseTopic}/${deviceName}/get`, JSON.stringify(Object.fromEntries(proprietes.map((p) => [p, '']))));
+}
+
 /** À chaque changement du réseau Zigbee : la liste entière des appareils. */
 export function onInventaire(fn) {
   inventaires.push(fn);

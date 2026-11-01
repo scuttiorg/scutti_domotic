@@ -40,6 +40,25 @@ export function deduireType(definition) {
 }
 
 /**
+ * Ce qu'on peut demander à une prise de relire, parmi ce que Scutti compte :
+ * `power`, la puissance du moment (W), et `energy`, le compteur cumulé (kWh)
+ * qu'elle tient elle-même et qui ne perd rien quand le boîtier est éteint.
+ * Le bit 4 d'`access` dit qu'elle accepte la demande ; sans lui, Zigbee2MQTT
+ * répondrait par une erreur. Vide pour une prise qui ne mesure rien.
+ */
+export function mesuresDe(definition) {
+  const lisibles = (definition?.exposes ?? []).flatMap((e) => proprietes(e))
+    .filter((p) => (p.access & 0b100) !== 0)
+    .map((p) => p.property);
+  return ['power', 'energy'].filter((m) => lisibles.includes(m));
+}
+
+/** Un nombre que la prise a mesuré, ou null : un `NaN` ou un négatif ne partent pas. */
+export function mesure(valeur) {
+  return typeof valeur === 'number' && Number.isFinite(valeur) && valeur >= 0 ? valeur : null;
+}
+
+/**
  * La liste à envoyer à Scutti, depuis `bridge/devices` et ce que les
  * appareils ont dit d'eux-mêmes depuis le démarrage.
  *
@@ -59,16 +78,17 @@ export function construireAppareils(devices, vus = new Map()) {
         batterie: typeof vu.batterie === 'number' ? vu.batterie : null,
         temperature: typeof vu.temperature === 'number' ? vu.temperature : null,
         vu_le: vu.vuLe ?? null,
+        puissance_w: mesure(vu.puissance),
+        energie_kwh: mesure(vu.energie),
       };
     });
 }
 
 /**
  * Ce qui, dans la liste, décrit le RÉSEAU : qui est là, sous quel nom, de
- * quel type. La batterie, la température et la date de dernière vue en sont
- * exclues : elles
- * changent à chaque relevé, et c'est pour elles seules que vaut le plancher
- * entre deux envois.
+ * quel type. La batterie, la température, la date de dernière vue et ce que
+ * mesure une prise en sont exclues : elles changent à chaque relevé, et
+ * c'est pour elles seules que vaut le plancher entre deux envois.
  *
  * Un appareil qui vient d'être appairé change cette signature deux fois :
  * à son arrivée, puis quand Zigbee2MQTT a fini de l'interroger et connaît
