@@ -21,7 +21,11 @@ set -euo pipefail
 
 DEST=/opt/chauffage
 HERE=$(cd "$(dirname "$0")" && pwd)
+# Sans sa barre finale : `$SCUTTI_URL/api/…` deviendrait `//api/…`, que
+# Scutti refuse (401), et la reprise de la sauvegarde Zigbee échouerait en
+# silence sur une carte neuve.
 SCUTTI_URL="${SCUTTI_URL:-}"
+SCUTTI_URL="${SCUTTI_URL%/}"
 SCUTTI_CODE="${SCUTTI_CODE:-}"
 MISE_A_JOUR="${MISE_A_JOUR:-}"
 
