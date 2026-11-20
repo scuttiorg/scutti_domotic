@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import config from './config.js';
 import { subscribe, unsubscribe, suivre, nePlusSuivre, interroger, setPlug, onInventaire, onVu, requeteBridge, liaison, onLiaison } from './mqtt.js';
-import { puissanceLue, energieLue, puissanceMesuree, mesureValable } from './puissance.js';
+import { puissanceLue, energieLue, puissanceMesuree, mesuresDesPrises, mesureValable } from './puissance.js';
 import { consigneEnVigueur, doitChauffer, capteursDe, prisesDe, prisesAPoser, mesurePiece, FUSEAU } from './thermostat.js';
 import { fetchConfiguration, pushReleves, fetchCommandes, ackCommande, putAppareils, echanger, putEtat } from './scutti.js';
 import { construireAppareils, signature } from './devices.js';
@@ -639,6 +639,10 @@ function push() {
       // Ce que les prises ont mesuré (puissance.js), ou null : Scutti garde
       // alors son estimation. Les relevés de bascule n'en portent jamais.
       puissance: puissanceMesuree(prisesDe(s.piece), vus, commandesPrises, Date.now()),
+      // Le même détail, prise par prise : c'est lui qui donne à Scutti la
+      // consommation de chaque prise. Une prise sans mesure valable en est
+      // absente ; un Scutti d'avant écarte le champ.
+      prises_mesures: mesuresDesPrises(prisesDe(s.piece), vus, commandesPrises, Date.now()),
     }));
   if (releves.length) pushReleves(releves);
   // Une prise sans mesure valable est interrogée : la réponse servira au
