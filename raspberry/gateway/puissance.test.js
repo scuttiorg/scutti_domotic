@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { puissanceLue, energieLue, puissanceMesuree, MESURE_VALIDE_MS, APRES_BASCULE_MS } from './puissance.js';
+import { puissanceLue, energieLue, puissanceMesuree, mesuresDesPrises, MESURE_VALIDE_MS, APRES_BASCULE_MS } from './puissance.js';
 
 const T = Date.parse('2026-11-01T12:00:00Z');
 const il = (ms) => new Date(T - ms).toISOString();
@@ -36,4 +36,24 @@ test('la mesure qui suit de trop près une commande est encore celle d’avant',
   assert.equal(puissanceMesuree(['a'], vus, commandes, T), null);
   const apres = new Map([['a', { puissance: 1490, puissanceLe: il(60_000 - APRES_BASCULE_MS) }]]);
   assert.equal(puissanceMesuree(['a'], apres, commandes, T), 1490);
+});
+
+test('chaque prise qui mesure est rapportée, celles qui ne mesurent pas sont absentes', () => {
+  const vus = new Map([
+    ['atelier/prise1', { puissance: 1486.4, puissanceLe: il(60_000) }],
+    ['atelier/prise2', { puissance: 0, puissanceLe: il(120_000) }],
+    ['atelier/prise3', { puissance: 800, puissanceLe: il(MESURE_VALIDE_MS + 1) }],
+  ]);
+  // La troisième n'a qu'une mesure périmée, la quatrième n'a jamais parlé :
+  // à zéro, elles diraient qu'elles n'ont rien consommé, ce qui serait faux.
+  assert.deepEqual(
+    mesuresDesPrises(['atelier/prise1', 'atelier/prise2', 'atelier/prise3', 'atelier/prise4'], vus, new Map(), T),
+    { 'atelier/prise1': 1486, 'atelier/prise2': 0 }
+  );
+  assert.deepEqual(mesuresDesPrises([], vus, new Map(), T), {});
+});
+
+test('une prise qui vient de basculer n’est pas rapportée non plus', () => {
+  const vus = new Map([['a', { puissance: 0, puissanceLe: il(50_000) }]]);
+  assert.deepEqual(mesuresDesPrises(['a'], vus, new Map([['a', T - 60_000]]), T), {});
 });

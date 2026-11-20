@@ -14,6 +14,12 @@
 // de puissance mesurée et Scutti garde son estimation : une somme à
 // moitié mesurée serait fausse sans le dire.
 //
+// LE DÉTAIL PART AUSSI, prise par prise (`mesuresDesPrises`) : une pièce à
+// plusieurs radiateurs ne disait pas lequel consommait, et une prise allumée
+// sur rien ne se voyait pas. Chaque prise qui mesure est rapportée pour
+// elle-même, même quand sa voisine se tait, et Scutti estime la part des
+// autres.
+//
 // Logique pure, sans I/O : index.js tient les mesures et les commandes.
 
 /** Au-delà, une mesure ne dit plus ce que tire la prise. */
@@ -42,6 +48,25 @@ export function mesureValable(vu, commandeLe, maintenant) {
   if (!Number.isFinite(le) || maintenant - le > MESURE_VALIDE_MS) return null;
   if (commandeLe !== undefined && le < commandeLe + APRES_BASCULE_MS) return null;
   return vu.puissance;
+}
+
+/**
+ * Ce que mesure CHAQUE prise de la pièce, en watts, par nom de prise. Une
+ * prise sans mesure valable est absente de l'objet, et non à zéro : Scutti
+ * compte alors sa part estimée plutôt qu'une consommation nulle inventée.
+ * Objet vide quand aucune prise ne mesure.
+ *
+ * C'est le détail qui manquait à `puissanceMesuree` : la somme d'une pièce
+ * ne dit pas lequel de ses radiateurs a consommé, et elle se taisait dès
+ * qu'une seule prise ne mesurait pas.
+ */
+export function mesuresDesPrises(prises, vus, commandes, maintenant) {
+  const mesures = {};
+  for (const prise of prises) {
+    const w = mesureValable(vus.get(prise), commandes.get(prise), maintenant);
+    if (w !== null) mesures[prise] = Math.round(w);
+  }
+  return mesures;
 }
 
 /**
