@@ -43,7 +43,11 @@ main() {
   # Tout ce qui est écrit ici (copies, archive, en-tête) n'est lisible que par root.
   umask 077
   local url jeton ca
+  # Sans sa barre finale, comme la passerelle (gateway/config.js) : Scutti
+  # ne reconnaît pas `//api/public/…` comme une route du boîtier, et répond
+  # 401. C'est ce qui faisait échouer la sauvegarde chaque nuit.
   url=$(lire_env SCUTTI_URL)
+  url=${url%/}
   jeton=$(lire_env SCUTTI_TOKEN)
   ca=$(lire_env SCUTTI_CA)
 
