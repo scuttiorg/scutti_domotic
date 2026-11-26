@@ -12,6 +12,7 @@ import { valeur } from './fusion.js';
 import { demarrerInterfaceLocale } from './web.js';
 import Acces from './acces.js';
 import Basculements from './basculements.js';
+import { etatLu, rattraper, prisesReellementAllumees } from './etatDesPrises.js';
 import { reglagesManquants, ENTRE_DEUX_ESSAIS } from './rapports.js';
 import { suivreFenetre, enchaine, relevesEnchaines, SUIVI_VIDE } from './fenetre.js';
 import { vitesseMesuree, apprendre } from './vitesse.js';
@@ -169,6 +170,55 @@ function poserPrise(prise, allume) {
 /** Toutes les prises de la pièce, dans le même état. */
 function commander(piece, allume) {
   for (const prise of prisesDe(piece)) poserPrise(prise, allume);
+}
+
+// ── Ce que les prises font vraiment (etatDesPrises.js) ──────────────────────
+//
+// Une prise dit son état à chaque message. S'il contredit ce que le boîtier
+// a décidé, l'ordre repart (sans s'acharner), et Scutti reçoit les prises
+// réellement allumées : un radiateur qui chauffe contre la régulation se
+// voit, au lieu d'être compté éteint.
+
+const etatsDesPrises = new Map();
+const rattrapages = new Map();
+const abandons = new Set();
+
+/** Les prises réellement allumées d'une pièce. */
+const reellementAllumees = (s) => prisesReellementAllumees(prisesDe(s.piece), s.allumees ?? [], etatsDesPrises);
+
+function suivreLEtat(prise, reelle) {
+  const avant = etatsDesPrises.get(prise);
+  etatsDesPrises.set(prise, reelle);
+  const s = [...state.values()].find((x) => prisesDe(x.piece).includes(prise));
+  if (!s) return;
+  // `s.allumees` n'existe qu'une fois la pièce pilotée : avant, rien à contredire.
+  const voulue = s.allumees ? s.allumees.includes(prise) : null;
+  const r = rattraper({ voulue, reelle, derniereCommande: commandesPrises.get(prise), essais: rattrapages.get(prise), maintenant: Date.now() });
+  rattrapages.set(prise, r.essais);
+  if (r.renvoyer) {
+    console.warn(`[${s.piece.nom}] ${prise} ${reelle ? 'allumée' : 'éteinte'} contre l’ordre du boîtier : l’ordre repart`);
+    abandons.delete(prise);
+    poserPrise(prise, voulue);
+  } else if (r.abandon && !abandons.has(prise)) {
+    abandons.add(prise);
+    console.warn(`[${s.piece.nom}] ${prise} reste ${reelle ? 'allumée' : 'éteinte'} malgré l’ordre : on la laisse, Scutti le verra`);
+  } else if (!r.abandon) {
+    abandons.delete(prise);
+  }
+  // Un changement d'état réel part tout de suite, comme une bascule.
+  if (avant !== undefined && avant !== reelle) {
+    const allumees = reellementAllumees(s);
+    basculements.noter({
+      piece_uuid: s.piece.uuid,
+      temperature: s.temperature,
+      humidite: s.humidite,
+      chauffe: allumees.length > 0,
+      consigne: capteurVivant(s) ? consigneDe(s) : null,
+      mesure_le: new Date().toISOString(),
+      prises_allumees: allumees,
+    });
+    envoyerBasculements();
+  }
 }
 
 function reguler(s) {
@@ -402,6 +452,8 @@ onVu((nom, payload) => {
   const maintenant = new Date().toISOString();
   // Une prise qui mesure : sa puissance, datée, et son compteur (puissance.js).
   const puissance = puissanceLue(payload);
+  const etat = etatLu(payload);
+  if (etat !== null) suivreLEtat(nom, etat);
   vus.set(nom, {
     batterie,
     temperature,
@@ -635,12 +687,14 @@ function push() {
       piece_uuid: s.piece.uuid,
       temperature: s.temperature,
       humidite: s.humidite,
-      chauffe: allumee(s),
+      // D'après ce que les prises disent d'elles-mêmes (etatDesPrises.js),
+      // pas d'après ce que le boîtier leur a demandé.
+      chauffe: reellementAllumees(s).length > 0,
       consigne: capteurVivant(s) ? consigneDe(s) : null,
       mesure_le: s.releveLe,
       // Ce qui a vraiment consommé : Scutti compte chaque radiateur au
       // prorata de ses prises allumées. Un Scutti d'avant écarte le champ.
-      prises_allumees: s.allumees ?? [],
+      prises_allumees: reellementAllumees(s),
       // Ce que les prises ont mesuré (puissance.js), ou null : Scutti garde
       // alors son estimation. Les relevés de bascule n'en portent jamais.
       puissance: puissanceMesuree(prisesDe(s.piece), vus, commandesPrises, Date.now()),
@@ -715,7 +769,8 @@ const contexte = {
     mode: s.piece.mode,
     consigne: capteurVivant(s) ? consigneDe(s) : null,
     temperature: s.temperature,
-    chauffe: allumee(s),
+    // Ce que font les prises, comme dans les relevés envoyés à Scutti.
+    chauffe: reellementAllumees(s).length > 0,
     note: noteDe(s),
     forcage: forcageDe(s),
   })),
