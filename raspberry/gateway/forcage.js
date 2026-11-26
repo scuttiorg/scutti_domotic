@@ -125,6 +125,12 @@ export function memesPrises(a = [], b = []) {
  *   l'appelant de l'effacer, comme un « Arrêter », pour que Scutti le sache.
  * - Les prises ne sont commandées que si ce qui doit être allumé change, ou
  *   qu'un forçage commence ou finit : chaque fois, un relevé part.
+ * - Au premier passage après un démarrage (`allumees` absent), elles sont
+ *   TOUJOURS commandées. Sans cela, un boîtier qui décidait d'emblée de ne
+ *   pas chauffer n'envoyait aucun ordre : des prises rallumées par une
+ *   coupure de courant, ou restées allumées pendant la mise à jour, le
+ *   restaient (La Calade, 26/11 : deux radiateurs à 1 600 et 1 370 W, à
+ *   17 °C pour 16 °C de consigne, le boîtier les croyant éteints).
  *
  * @param etat `{ piece, chauffe, temperature, allumees, forceJusqua }` :
  *   `chauffe` est ce que veut la régulation, `allumees` et `forceJusqua` ce
@@ -143,7 +149,7 @@ export function pilotage({ piece, chauffe, temperature, allumees, forceJusqua },
     allumees: voulues,
     forceJusqua: jusqua,
     forcage,
-    commander: !memesPrises(voulues, allumees) || jusqua !== (forceJusqua ?? null),
+    commander: allumees === undefined || !memesPrises(voulues, allumees) || jusqua !== (forceJusqua ?? null),
     arreter,
   };
 }
