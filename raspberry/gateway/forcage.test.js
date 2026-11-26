@@ -167,6 +167,14 @@ test('après un redémarrage, un forçage rangé reprend avec son échéance d�
   assert.deepEqual(p.allumees, ['salle/fond']);
   assert.equal(p.forceJusqua, dans(60));
   assert.equal(p.commander, true);
-  // Une pièce neuve, sans forçage ni chauffe : rien à commander, comme avant.
-  assert.equal(pilotage({ piece: salle, chauffe: false, temperature: 19 }, undefined, t0).commander, false);
+});
+
+test('au premier passage après un démarrage, les prises sont commandées même pour rester éteintes', () => {
+  // La Calade, 26/11 : sans forçage ni chauffe, le boîtier n'envoyait rien ;
+  // des prises allumées pendant la coupure ou la mise à jour le restaient.
+  const p = pilotage({ piece: salle, chauffe: false, temperature: 17.2 }, undefined, t0);
+  assert.deepEqual(p.allumees, []);
+  assert.equal(p.commander, true);
+  // Le passage suivant, rien n'a changé : plus rien à commander.
+  assert.equal(pilotage({ piece: salle, chauffe: false, temperature: 17.2, allumees: [], forceJusqua: null }, undefined, t0 + 60_000).commander, false);
 });
