@@ -22,6 +22,17 @@
 // Après une coupure, l'historique repart de la dernière mesure : la chute
 // qui l'a déclenchée ne doit pas la déclencher une seconde fois.
 //
+// LE PREMIER RELEVÉ D'UN CAPTEUR, après un démarrage du boîtier ou un
+// silence, n'entre pas dans l'historique. Il sert à réguler, mais il peut
+// être vieux : au démarrage, Zigbee2MQTT renvoie la dernière valeur qu'il
+// avait gardée, celle d'avant la coupure de courant, prise dans une pièce
+// encore chaude. Le vrai relevé arrivait ensuite, plus froid, et la chute
+// entre les deux coupait la pièce pour une fenêtre que personne n'avait
+// ouverte, juste au moment où elle devait se remettre à chauffer. Même
+// chose le 6/11 au retour d'un capteur muet : 14,4 °C puis 12,3 °C en 28 s.
+// Seul un relevé qui suit de près un autre du même capteur compte
+// (`enchaine`).
+//
 // Tout ici est pur : index.js garde l'état de chaque pièce et l'applique.
 
 /** La baisse qui trahit une ouverture, en °C. */
@@ -38,6 +49,20 @@ const EPSILON = 1e-9;
 
 /** Un suivi neuf : aucune mesure, aucune coupure. */
 export const SUIVI_VIDE = Object.freeze({ historique: [], fenetre: null });
+
+/**
+ * Un relevé arrivé à `maintenant` suit-il de près le précédent du même
+ * capteur (`{ vu }`, sur le chronomètre) ? Le premier depuis le démarrage,
+ * ou depuis un silence de plus de `delai`, ne le suit pas.
+ */
+export function enchaine(precedent, maintenant, delai) {
+  return typeof precedent?.vu === 'number' && maintenant - precedent.vu < delai;
+}
+
+/** Les relevés des capteurs (nom -> relevé) qui comptent pour la fenêtre. */
+export function relevesEnchaines(mesures) {
+  return new Map([...mesures].filter(([, m]) => m.enchaine));
+}
 
 /**
  * Ajoute la mesure de la pièce (`{ temperature, le }`, mesurePiece) à son
