@@ -13,7 +13,7 @@ import { demarrerInterfaceLocale } from './web.js';
 import Acces from './acces.js';
 import Basculements from './basculements.js';
 import { reglagesManquants, ENTRE_DEUX_ESSAIS } from './rapports.js';
-import { suivreFenetre, SUIVI_VIDE } from './fenetre.js';
+import { suivreFenetre, enchaine, relevesEnchaines, SUIVI_VIDE } from './fenetre.js';
 import { vitesseMesuree, apprendre } from './vitesse.js';
 import { instant, dateDe } from './horloge.js';
 import {
@@ -62,10 +62,12 @@ const capteurVivant = (s) => s.temperature !== null;
 
 function onReleve(nom, releve) {
   const precedent = mesures.get(nom) ?? {};
+  const maintenant = instant();
   mesures.set(nom, {
     temperature: releve.temperature ?? precedent.temperature,
     humidite: releve.humidite ?? precedent.humidite,
-    vu: instant(),
+    vu: maintenant,
+    enchaine: enchaine(precedent, maintenant, config.sensorTimeout),
   });
   for (const s of state.values()) {
     if (capteursDe(s.piece).some((c) => c.nom === nom)) reguler(s);
@@ -74,15 +76,18 @@ function onReleve(nom, releve) {
 
 /**
  * La température de la pièce, depuis ses capteurs vivants (thermostat.js) ;
- * rend la mesure avec son heure (`le`, en ISO), ou null.
+ * rend celle que suit la fenêtre, des seuls relevés enchaînés (fenetre.js),
+ * avec son heure (`le`, en ISO), ou null.
  */
 function mesurer(s) {
-  const m = mesurePiece(s.piece, mesures, instant(), config.sensorTimeout);
+  const maintenant = instant();
+  const m = mesurePiece(s.piece, mesures, maintenant, config.sensorTimeout);
   s.temperature = m?.temperature ?? null;
   s.humidite = m?.humidite ?? null;
   if (!m) return null;
   s.releveLe = dateDe(m.vu).toISOString();
-  return { ...m, le: s.releveLe };
+  const f = mesurePiece(s.piece, relevesEnchaines(mesures), maintenant, config.sensorTimeout);
+  return f ? { ...f, le: dateDe(f.vu).toISOString() } : null;
 }
 
 /** La fin de la coupure pour fenêtre ouverte, en ISO, ou null. */

@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  suivreFenetre, noterMesure, chuteBrutale, SUIVI_VIDE,
+  suivreFenetre, noterMesure, chuteBrutale, enchaine, relevesEnchaines, SUIVI_VIDE,
   CHUTE_FENETRE, CHUTE_FENETRE_MS, COUPURE_FENETRE_MS, REMONTEE_FENETRE,
 } from './fenetre.js';
+import { mesurePiece } from './thermostat.js';
 
 const t0 = Date.parse('2026-10-28T12:00:00Z');
 const min = (n) => t0 + n * 60_000;
@@ -88,4 +89,55 @@ test('l’option coupée : aucune coupure, et celle en cours tombe', () => {
   assert.equal(suivreFenetre(vive, mesure(3, 18), min(3), false).fenetre, null);
   const coupee = rejouer([[0, 20], [3, 19]]);
   assert.equal(suivreFenetre(coupee, mesure(4, 18.9), min(4), false).fenetre, null);
+});
+
+test('un relevé enchaîne s’il suit de moins de 20 min un autre du même capteur', () => {
+  const vingtMin = 20 * 60_000;
+  assert.equal(enchaine(undefined, min(0), vingtMin), false);
+  assert.equal(enchaine({}, min(0), vingtMin), false);
+  assert.equal(enchaine({ vu: min(0) }, min(5), vingtMin), true);
+  assert.equal(enchaine({ vu: min(0) }, min(20), vingtMin), false);
+  const releves = new Map([['a', { temperature: 19, vu: min(0), enchaine: true }], ['b', { temperature: 15, vu: min(0), enchaine: false }]]);
+  assert.deepEqual([...relevesEnchaines(releves).keys()], ['a']);
+});
+
+/**
+ * Le chemin de index.js : chaque relevé du capteur `atelier`, `[minute, °C]`,
+ * passe par `enchaine`, puis la pièce suit la fenêtre sur les seuls relevés
+ * enchaînés. Rend le suivi et la température qui sert à réguler.
+ */
+function capteurQuiParle(releves, suivi = SUIVI_VIDE) {
+  const piece = { capteurs: [{ nom: 'atelier', compte: true }] };
+  const vingtMin = 20 * 60_000;
+  const parCapteur = new Map();
+  let temperature = null;
+  for (const [minutes, t] of releves) {
+    const maintenant = min(minutes);
+    parCapteur.set('atelier', { temperature: t, vu: maintenant, enchaine: enchaine(parCapteur.get('atelier'), maintenant, vingtMin) });
+    temperature = mesurePiece(piece, parCapteur, maintenant, vingtMin)?.temperature ?? null;
+    const f = mesurePiece(piece, relevesEnchaines(parCapteur), maintenant, vingtMin);
+    suivi = suivreFenetre(suivi, f && { ...f, le: new Date(f.vu).toISOString() }, maintenant);
+  }
+  return { suivi, temperature };
+}
+
+test('au démarrage, la valeur d’avant la coupure puis la vraie ne font pas une fenêtre', () => {
+  // Zigbee2MQTT renvoie 19 °C, gardés d'avant la coupure ; le capteur dit 16,5 °C une minute après.
+  const { suivi, temperature } = capteurQuiParle([[0, 19], [1, 16.5]]);
+  assert.equal(suivi.fenetre, null);
+  assert.equal(temperature, 16.5);
+});
+
+test('au retour d’un capteur muet, son premier relevé ne fait pas une fenêtre (le 6/11)', () => {
+  const { suivi } = capteurQuiParle([[0, 14.4], [55, 14.4], [55.5, 12.3]]);
+  assert.equal(suivi.fenetre, null);
+});
+
+test('le premier relevé sert quand même à réguler', () => {
+  assert.equal(capteurQuiParle([[0, 19]]).temperature, 19);
+});
+
+test('une vraie chute, entre deux relevés enchaînés, coupe toujours', () => {
+  const { suivi } = capteurQuiParle([[0, 19], [2, 19], [4, 17.8]]);
+  assert.ok(suivi.fenetre);
 });
